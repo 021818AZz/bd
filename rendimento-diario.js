@@ -8,7 +8,8 @@ const rendimentos = {
   'Produto 4': 16000,
   'Produto 5': 30000,
   'Produto 6': 60000,
-  'Produto 7': 100000
+  'Produto 7': 100000,
+  'Produto 7': 160000
 };
 
 async function processarRendimentos() {
