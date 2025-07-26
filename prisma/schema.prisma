@@ -1,0 +1,126 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String        @id @default(auto()) @map("_id") @db.ObjectId
+  telefone          String        @unique
+  senha             String
+  codigoConvite     String        @unique
+  criadoEm          DateTime      @default(now())
+  saldo             Float         @default(1800.00)
+
+  referenciadoPor   String?       @db.ObjectId
+  referenciado      User?         @relation("MinhaIndicacao", fields: [referenciadoPor], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  minhasIndicacoes  User[]        @relation("MinhaIndicacao")
+
+  indicacoesFeitas  Indicacao[]   @relation("IndicacoesFeitas")
+  indicacaoRecebida Indicacao?    @relation("IndicacaoRecebida")
+
+  investimentos     Investimento[]
+  rendimentos       Rendimento[]
+  bankAccounts      BankAccount[]
+  deposits          Deposit[]
+  withdrawals       Withdrawal[]
+  comissoes         Comissao[]
+}
+
+model Indicacao {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  codigoConvite   String
+  dataIndicacao   DateTime @default(now())
+
+  indicador       User     @relation("IndicacoesFeitas", fields: [indicadorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  indicadorId     String   @db.ObjectId
+
+  indicado        User     @relation("IndicacaoRecebida", fields: [indicadoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  indicadoId      String   @db.ObjectId
+
+  @@unique([indicadoId])
+}
+
+model Investimento {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  produto         String
+  valor           Float
+  data            DateTime @default(now())
+  ultimoPagamento DateTime?
+  user            User     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  userId          String   @db.ObjectId
+
+  comissoes       Comissao[]
+}
+
+model Rendimento {
+  id     String   @id @default(auto()) @map("_id") @db.ObjectId
+  valor  Float
+  data   DateTime @default(now())
+  user   User     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  userId String   @db.ObjectId
+}
+
+model BankAccount {
+  id             String      @id @default(auto()) @map("_id") @db.ObjectId
+  bank           String
+  account_number String
+  account_holder String
+  created_at     DateTime    @default(now())
+  updated_at     DateTime    @updatedAt
+  user           User        @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  userId         String      @db.ObjectId
+  withdrawals    Withdrawal[]
+}
+
+model Withdrawal {
+  id              String      @id @default(auto()) @map("_id") @db.ObjectId
+  amount          Float
+  fee             Float
+  net_amount      Float
+  status          String      @default("pending")
+  bank_account    BankAccount @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  bank_account_id String      @db.ObjectId
+  user            User        @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user_id         String      @db.ObjectId
+  created_at      DateTime    @default(now())
+  updated_at      DateTime    @updatedAt
+}
+
+model Deposit {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  amount      Float
+  bank        String
+  comprovante String   // Armazena a imagem em base64 ou URL (sugestão: usar URL)
+  fileName    String
+  fileType    String
+  status      String   @default("pending") // pending, approved, rejected
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  userId      String   @db.ObjectId
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@map("deposits")
+}
+
+model Comissao {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId            String   @db.ObjectId
+  user              User     @relation(fields: [userId], references: [id])
+
+  valor             Float
+  nivel             String   // A, B ou C
+
+  investimentoId    String   @db.ObjectId
+  investimento      Investimento @relation(fields: [investimentoId], references: [id])
+
+  valorInvestimento Float
+  createdAt         DateTime @default(now())
+
+  @@index([userId])
+  @@index([investimentoId])
+}
