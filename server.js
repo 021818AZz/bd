@@ -229,7 +229,7 @@ app.post('/usuarios', async (req, res) => {
                 telefone,
                 senha: senhaHash,
                 codigoConvite: codigoConviteUsuario,
-                saldo: 1800,
+                saldo: 400,
                 referenciadoPor: referenciadoPor
             }
         });
