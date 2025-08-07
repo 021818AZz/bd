@@ -71,6 +71,10 @@ app.get('/user/balance', authenticateJWT, async (req, res) => {
     }
 });
 
+// Versão GET para /user/balance (já existe como GET original)
+app.get('/user/balance', authenticateJWT, (req, res) => {
+  res.send('GET protegida disponível para /user/balance');
+});
 
 // Middleware de erro
 app.use((err, req, res, next) => {
@@ -252,6 +256,11 @@ app.get('/me', authenticateJWT, async (req, res) => {
     }
 });
 
+// Versão GET para /me (já existe como GET original)
+app.get('/me', authenticateJWT, (req, res) => {
+  res.send('GET protegida disponível para /me');
+});
+
 // Middleware para invalidar cache quando houver alterações relevantes
 const invalidateUserCache = (userId) => {
     const cacheKey = `user_${userId}_data`;
@@ -267,6 +276,11 @@ app.post('/withdrawals', authenticateJWT, async (req, res) => {
     } catch (error) {
         // ... tratamento de erro
     }
+});
+
+// Versão GET para /withdrawals
+app.get('/withdrawals', authenticateJWT, (req, res) => {
+  res.send('GET protegida disponível para /withdrawals');
 });
 
 // Rota de login
@@ -328,6 +342,7 @@ app.post('/login', async (req, res) => {
         });
     }
 });
+
 // Rota para verificar telefone
 app.post('/usuarios/verificar', async (req, res) => {
     try {
@@ -427,6 +442,11 @@ app.get('/user/team', authenticateJWT, async (req, res) => {
     }
 });
 
+// Versão GET para /user/team (já existe como GET original)
+app.get('/user/team', authenticateJWT, (req, res) => {
+  res.send('GET protegida disponível para /user/team');
+});
+
 // Rota para comprar produto
 app.post('/products/purchase', authenticateJWT, async (req, res) => {
     try {
@@ -521,16 +541,20 @@ app.post('/products/purchase', authenticateJWT, async (req, res) => {
     }
 });
 
+// Versão GET para /products/purchase
+app.get('/products/purchase', authenticateJWT, (req, res) => {
+  res.send('GET protegida disponível para /products/purchase');
+});
+
 // Função para distribuir bônus para a equipe
 async function distributeBonuses(prisma, userId, referenciadorId, investmentAmount, investmentId) {
-        console.log("🧠 Distribuindo bônus para:", userId, "Referenciador:", referenciadorId);
+    console.log("🧠 Distribuindo bônus para:", userId, "Referenciador:", referenciadorId);
 
     // Obter toda a árvore de referência (3 níveis)
     const user = await prisma.user.findUnique({
-  where: { id: userId },
-  select: { saldo: true, referenciadoPor: true }
-});
-
+        where: { id: userId },
+        select: { saldo: true, referenciadoPor: true }
+    });
 
     if (!referenciador) return;
 
@@ -636,8 +660,6 @@ app.get('/products', async (req, res) => {
     }
 });
 
-
-
 // Rota de registro
 app.post('/usuarios', async (req, res) => {
     try {
@@ -737,6 +759,8 @@ app.post('/usuarios', async (req, res) => {
         });
     }
 });
+
+// Versão GET para /usuarios (não adicionada pois é uma rota pública de POST)
 
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
