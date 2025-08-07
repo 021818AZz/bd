@@ -14,6 +14,7 @@ model User {
   codigoConvite     String        @unique
   criadoEm          DateTime      @default(now())
   saldo             Float         @default(400.00)
+  
 
   referenciadoPor   String?       @db.ObjectId
   referenciado      User?         @relation("MinhaIndicacao", fields: [referenciadoPor], references: [id], onDelete: NoAction, onUpdate: NoAction)

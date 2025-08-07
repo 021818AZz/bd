@@ -1,293 +1,314 @@
 const express = require('express');
-const { PrismaClient } = require('@prisma/client');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const crypto = require('crypto');
 const cors = require('cors');
-const cron = require('node-cron');
-const { processarRendimentos } = require('./rendimento-diario');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const { PrismaClient } = require('@prisma/client');
 
-const app = express();
 const prisma = new PrismaClient();
-
+const app = express();
+const PORT = 3333;
+// Configuração do CORS e JSON
 app.use(cors());
 app.use(express.json());
 
-const JWT_SECRET = 'seu_segredo_super_seguro';
-
-// Gerar código de convite
-function gerarCodigoConvite() {
-    const random = crypto.randomBytes(4).toString('hex').toUpperCase();
-    return `INV-${random}`;
-}
-
-// Gerar token JWT
-function gerarToken(id) {
-    return jwt.sign({ id }, JWT_SECRET, { expiresIn: '7d' });
-}
-
-// Middleware para proteger rotas
-function autenticarToken(req, res, next) {
+// Adicione este middleware para autenticação JWT
+const authenticateJWT = (req, res, next) => {
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ mensagem: "Token não fornecido" });
-    }
-
-    const token = authHeader.split(' ')[1];
-    try {
-        const payload = jwt.verify(token, JWT_SECRET);
-        req.usuarioId = payload.id;
-        next();
-    } catch {
-        return res.status(401).json({ mensagem: "Token inválido ou expirado" });
-    }
-}
-
-// ================== ROTAS PÚBLICAS ================== //
-// Obter subordinados em 3 níveis de profundidade
-// Rota para obter os dados da equipe
-// Rota para obter os dados da equipe
-app.get('/api/minha-equipe', autenticarToken, async (req, res) => {
-  try {
-    const userId = req.usuarioId;
-
-    // Buscar informações do usuário atual
-    const usuario = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        codigoConvite: true
-      }
-    });
-
-    if (!usuario) {
-      return res.status(404).json({ mensagem: "Usuário não encontrado" });
-    }
-
-    // Buscar todos os usuários indicados diretamente (nível A)
-    const nivelA = await prisma.user.findMany({
-      where: { 
-        referenciadoPor: userId 
-      },
-      select: {
-        id: true,
-        telefone: true,
-        criadoEm: true,
-        codigoConvite: true
-      }
-    });
-
-    // Buscar usuários de nível B (indicados pelos indicados diretos)
-    const idsNivelA = nivelA.map(u => u.id);
-    const nivelB = await prisma.user.findMany({
-      where: {
-        referenciadoPor: { in: idsNivelA }
-      },
-      select: {
-        id: true,
-        telefone: true,
-        criadoEm: true,
-        codigoConvite: true
-      }
-    });
-
-    // Buscar usuários de nível C (indicados pelos usuários de nível B)
-    const idsNivelB = nivelB.map(u => u.id);
-    const nivelC = await prisma.user.findMany({
-      where: {
-        referenciadoPor: { in: idsNivelB }
-      },
-      select: {
-        id: true,
-        telefone: true,
-        criadoEm: true,
-        codigoConvite: true
-      }
-    });
-
-    // Função para verificar investimentos e calcular comissões
-    const calcularComissoes = async (usuarios, nivel) => {
-      const usuariosComInvestimentos = [];
-      let totalComissoes = 0;
-      
-      for (const usuario of usuarios) {
-        const investimentos = await prisma.investimento.findMany({
-          where: { userId: usuario.id }
-        });
+    
+    if (authHeader) {
+        const token = authHeader.split(' ')[1];
         
-        if (investimentos.length > 0) {
-          usuariosComInvestimentos.push(usuario);
-          
-          // Calcular comissão para cada investimento
-          for (const investimento of investimentos) {
-            let porcentagem = 0;
-            switch(nivel) {
-              case 'A': porcentagem = 0.30; break;
-              case 'B': porcentagem = 0.06; break;
-              case 'C': porcentagem = 0.01; break;
+        jwt.verify(token, 'SEGREDO_SUPER_SECRETO', (err, user) => {
+            if (err) {
+                return res.sendStatus(403);
             }
-            totalComissoes += investimento.valor * porcentagem;
-          }
-        }
-      }
-      
-      return {
-        usuariosValidos: usuariosComInvestimentos,
-        totalComissoes
-      };
-    };
-
-    // Calcular para cada nível
-    const nivelADados = await calcularComissoes(nivelA, 'A');
-    const nivelBDados = await calcularComissoes(nivelB, 'B');
-    const nivelCDados = await calcularComissoes(nivelC, 'C');
-
-    // Calcular totais
-    const totalIndicados = nivelA.length + nivelB.length + nivelC.length;
-    const indicadosValidos = nivelADados.usuariosValidos.length + nivelBDados.usuariosValidos.length + nivelCDados.usuariosValidos.length;
-    
-    // Calcular comissões totais recebidas
-    const comissoes = await prisma.comissao.aggregate({
-      where: { userId },
-      _sum: { valor: true }
-    });
-
-    res.json({
-      codigoConvite: usuario.codigoConvite,
-      totalIndicados,
-      indicadosValidos,
-      descontoTotal: comissoes._sum.valor?.toFixed(2) || '0.00',
-      nivelA: {
-        quantidade: nivelA.length,
-        quantidadeValidos: nivelADados.usuariosValidos.length,
-        valor: nivelADados.totalComissoes.toFixed(2),
-        usuarios: nivelA,
-        usuariosValidos: nivelADados.usuariosValidos
-      },
-      nivelB: {
-        quantidade: nivelB.length,
-        quantidadeValidos: nivelBDados.usuariosValidos.length,
-        valor: nivelBDados.totalComissoes.toFixed(2),
-        usuarios: nivelB,
-        usuariosValidos: nivelBDados.usuariosValidos
-      },
-      nivelC: {
-        quantidade: nivelC.length,
-        quantidadeValidos: nivelCDados.usuariosValidos.length,
-        valor: nivelCDados.totalComissoes.toFixed(2),
-        usuarios: nivelC,
-        usuariosValidos: nivelCDados.usuariosValidos
-      },
-      comissoesTotais: comissoes._sum.valor || 0
-    });
-
-  } catch (error) {
-    console.error("Erro ao buscar equipe:", error);
-    res.status(500).json({ mensagem: "Erro ao buscar dados da equipe", erro: error.message });
-  }
-});
-// Criar usuário
-app.post('/usuarios', async (req, res) => {
-    const { telefone, senha, codigoConvite } = req.body;
-    
-    if (!telefone || !senha) {
-        return res.status(400).json({ mensagem: "Telefone e senha são obrigatórios!" });
+            
+            req.user = user;
+            next();
+        });
+    } else {
+        res.sendStatus(401);
     }
+};
 
-    // Validar formato do telefone (+244 seguido de 9 dígitos)
-    if (!telefone.match(/^\+244\d{9}$/)) {
-        return res.status(400).json({ mensagem: "Formato de telefone inválido. Deve ser +244 seguido de 9 dígitos" });
-    }
-
+// Rota para obter saldo e retiradas (protegida por JWT)
+app.get('/user/balance', authenticateJWT, async (req, res) => {
     try {
-        // Verificar se o telefone já está cadastrado
-        const usuarioExistente = await prisma.user.findUnique({
+        const userId = req.user.id;
+        
+        // Busca em paralelo para melhor performance
+        const [user, withdrawals] = await Promise.all([
+            prisma.user.findUnique({
+                where: { id: userId },
+                select: { saldo: true }
+            }),
+            prisma.withdrawal.aggregate({
+                where: { user_id: userId },
+                _sum: { amount: true }
+            })
+        ]);
+
+        if (!user) {
+            return res.status(404).json({ 
+                success: false,
+                mensagem: "Usuário não encontrado" 
+            });
+        }
+
+        res.json({
+            success: true,
+            saldo: user.saldo,
+            totalRetiradas: withdrawals._sum.amount || 0
+        });
+
+    } catch (error) {
+        console.error("Erro ao buscar saldo:", error);
+        res.status(500).json({
+            success: false,
+            mensagem: "Erro ao buscar saldo",
+            error: error.message
+        });
+    }
+});
+
+
+// Middleware de erro
+app.use((err, req, res, next) => {
+    console.error(err.stack);
+    res.status(500).json({ mensagem: 'Erro interno no servidor' });
+});
+
+const NodeCache = require('node-cache');
+const cache = new NodeCache({ stdTTL: 30, checkperiod: 60 }); // Cache de 30 segundos
+
+// Rota /me com cache e otimizações
+app.get('/me', authenticateJWT, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const cacheKey = `user_${userId}_data`;
+
+        // Verifica se há cache válido
+        const cachedData = cache.get(cacheKey);
+        if (cachedData) {
+            return res.json({
+                success: true,
+                ...cachedData,
+                cached: true,
+                timestamp: new Date()
+            });
+        }
+
+        // Busca dados em paralelo com otimizações
+        const [
+            user, 
+            withdrawals, 
+            deposits, 
+            bankAccounts, 
+            investments, 
+            earnings, 
+            referrals, 
+            commissions
+        ] = await Promise.all([
+            prisma.user.findUnique({
+                where: { id: userId },
+                select: {
+                    id: true,
+                    telefone: true,
+                    codigoConvite: true,
+                    saldo: true,
+                    criadoEm: true
+                }
+            }),
+            prisma.withdrawal.findMany({
+                where: { user_id: userId },
+                select: {
+                    id: true,
+                    amount: true,
+                    status: true,
+                    created_at: true,
+                    bank_account: {
+                        select: {
+                            bank: true,
+                            account_number: true
+                        }
+                    }
+                },
+                orderBy: { created_at: 'desc' },
+                take: 20 // Limita para melhor performance
+            }),
+            prisma.deposit.findMany({
+                where: { userId },
+                select: {
+                    id: true,
+                    amount: true,
+                    status: true,
+                    createdAt: true,
+                    bank: true
+                },
+                orderBy: { createdAt: 'desc' },
+                take: 20
+            }),
+            prisma.bankAccount.findMany({
+                where: { userId },
+                select: {
+                    id: true,
+                    bank: true,
+                    account_number: true,
+                    account_holder: true
+                }
+            }),
+            prisma.investimento.findMany({
+                where: { userId },
+                select: {
+                    id: true,
+                    produto: true,
+                    valor: true,
+                    data: true
+                },
+                orderBy: { data: 'desc' },
+                take: 10
+            }),
+            prisma.rendimento.findMany({
+                where: { userId },
+                select: {
+                    id: true,
+                    valor: true,
+                    data: true
+                },
+                orderBy: { data: 'desc' },
+                take: 20
+            }),
+            prisma.indicacao.findMany({
+                where: { indicadorId: userId },
+                select: {
+                    dataIndicacao: true,
+                    indicado: {
+                        select: {
+                            telefone: true,
+                            criadoEm: true,
+                            saldo: true
+                        }
+                    }
+                },
+                orderBy: { dataIndicacao: 'desc' },
+                take: 20
+            }),
+            prisma.comissao.findMany({
+                where: { userId },
+                select: {
+                    id: true,
+                    valor: true,
+                    nivel: true,
+                    createdAt: true,
+                    valorInvestimento: true
+                },
+                orderBy: { createdAt: 'desc' },
+                take: 20
+            })
+        ]);
+
+        if (!user) {
+            return res.status(404).json({ 
+                success: false,
+                mensagem: "Usuário não encontrado" 
+            });
+        }
+
+        // Calcula totais
+        const responseData = {
+            user,
+            withdrawals,
+            deposits,
+            bankAccounts,
+            investments,
+            earnings,
+            referrals,
+            commissions,
+            totals: {
+                withdrawals: withdrawals.reduce((sum, w) => sum + w.amount, 0),
+                deposits: deposits.reduce((sum, d) => sum + (d.status === 'approved' ? d.amount : 0), 0),
+                earnings: earnings.reduce((sum, e) => sum + e.valor, 0),
+                commissions: commissions.reduce((sum, c) => sum + c.valor, 0)
+            }
+        };
+
+        // Atualiza cache
+        cache.set(cacheKey, responseData);
+
+        res.json({
+            success: true,
+            ...responseData,
+            cached: false,
+            timestamp: new Date()
+        });
+
+    } catch (error) {
+        console.error("Erro ao buscar informações do usuário:", error);
+        res.status(500).json({
+            success: false,
+            mensagem: "Erro ao buscar informações do usuário",
+            error: error.message
+        });
+    }
+});
+
+// Middleware para invalidar cache quando houver alterações relevantes
+const invalidateUserCache = (userId) => {
+    const cacheKey = `user_${userId}_data`;
+    cache.del(cacheKey);
+};
+
+// Exemplo de uso em outras rotas que modificam dados:
+app.post('/withdrawals', authenticateJWT, async (req, res) => {
+    try {
+        // ... lógica de criação de retirada
+        invalidateUserCache(req.user.id);
+        // ... resto do código
+    } catch (error) {
+        // ... tratamento de erro
+    }
+});
+
+// Rota de login
+app.post('/login', async (req, res) => {
+    try {
+        const { telefone, senha } = req.body;
+        
+        // Validações básicas
+        if (!telefone || !senha) {
+            return res.status(400).json({
+                success: false,
+                mensagem: "Telefone e senha são obrigatórios!"
+            });
+        }
+
+        // Buscar usuário no banco de dados
+        const usuario = await prisma.user.findUnique({
             where: { telefone }
         });
 
-        if (usuarioExistente) {
-            return res.status(400).json({ mensagem: "Este telefone já está cadastrado!" });
-        }
-
-        const senhaHash = await bcrypt.hash(senha, 10);
-        const codigoConviteUsuario = gerarCodigoConvite();
-
-        // Verificar código de convite
-        let referenciadoPor = null;
-        if (codigoConvite) {
-            const usuarioReferenciador = await prisma.user.findFirst({
-                where: { codigoConvite }
-            });
-
-            if (!usuarioReferenciador) {
-                return res.status(400).json({ mensagem: "Código de convite inválido!" });
-            }
-            referenciadoPor = usuarioReferenciador.id;
-        }
-
-        const novoUsuario = await prisma.user.create({
-            data: {
-                telefone,
-                senha: senhaHash,
-                codigoConvite: codigoConviteUsuario,
-                saldo: 400,
-                referenciadoPor: referenciadoPor
-            }
-        });
-
-        if (referenciadoPor) {
-            await prisma.user.update({
-                where: { id: referenciadoPor },
-                data: { saldo: { increment: 500 } }
-            });
-
-            await prisma.indicacao.create({
-                data: {
-                    indicadorId: referenciadoPor,
-                    indicadoId: novoUsuario.id,
-                    codigoConvite: codigoConvite
-                }
-            });
-        }
-
-        const token = gerarToken(novoUsuario.id);
-
-        res.status(201).json({
-            mensagem: "Usuário criado com sucesso!",
-            usuario: {
-                id: novoUsuario.id,
-                telefone: novoUsuario.telefone,
-                codigoConvite: novoUsuario.codigoConvite,
-                saldo: novoUsuario.saldo
-            },
-            token
-        });
-    } catch (error) {
-        console.error("Erro ao criar usuário:", error);
-        res.status(400).json({
-            mensagem: "Erro ao criar usuário!",
-            erro: error.message
-        });
-    }
-});
-// Login
-app.post('/login', async (req, res) => {
-    const { telefone, senha } = req.body;
-
-    try {
-        const usuario = await prisma.user.findUnique({ where: { telefone } });
-
         if (!usuario) {
-            return res.status(404).json({ mensagem: "Usuário não encontrado!" });
+            return res.status(401).json({
+                success: false,
+                mensagem: "Telefone não cadastrado!"
+            });
         }
 
-        const senhaCorreta = await bcrypt.compare(senha, usuario.senha);
-        if (!senhaCorreta) {
-            return res.status(401).json({ mensagem: "Senha incorreta!" });
+        // Verificar senha
+        const senhaValida = await bcrypt.compare(senha, usuario.senha);
+        
+        if (!senhaValida) {
+            return res.status(401).json({
+                success: false,
+                mensagem: "Senha incorreta!"
+            });
         }
 
-        const token = gerarToken(usuario.id);
+        // Gerar token JWT
+        const token = jwt.sign({ id: usuario.id }, 'SEGREDO_SUPER_SECRETO', { expiresIn: '7d' });
 
-        res.status(200).json({
+        res.json({
+            success: true,
             mensagem: "Login bem-sucedido!",
             usuario: {
                 id: usuario.id,
@@ -297,739 +318,426 @@ app.post('/login', async (req, res) => {
             },
             token
         });
+
     } catch (error) {
-        res.status(500).json({ mensagem: "Erro ao fazer login", erro: error.message });
-    }
-});
-
-// ================== ROTAS PROTEGIDAS ================== //
-app.use(autenticarToken);
-
-// Dados do usuário
-app.get('/me', async (req, res) => {
-    try {
-        const usuario = await prisma.user.findUnique({
-            where: { id: req.usuarioId },
-            select: {
-                id: true,
-                telefone: true,
-                codigoConvite: true,
-                saldo: true,
-                criadoEm: true,
-                referenciadoPor: true
-            }
-        });
-
-        if (!usuario) {
-            return res.status(404).json({ mensagem: "Usuário não encontrado!" });
-        }
-
-        const hoje = new Date();
-        hoje.setHours(0, 0, 0, 0);
-
-        // Receita de hoje
-        const receitaDeHoje = await prisma.rendimento.aggregate({
-            where: {
-                userId: req.usuarioId,
-                data: { gte: hoje }
-            },
-            _sum: { valor: true }
-        });
-
-        // Rendimento total
-        const rendimentoTotal = await prisma.rendimento.aggregate({
-            where: { userId: req.usuarioId },
-            _sum: { valor: true }
-        });
-
-        // Indicações do usuário
-        const indicacoes = await prisma.indicacao.findMany({
-            where: { indicadorId: req.usuarioId },
-            include: { indicado: true },
-            orderBy: { dataIndicacao: 'desc' }
-        });
-
-        // Comissões recebidas por nível
-        const comissoesA = await prisma.comissao.findMany({
-            where: { 
-                userId: req.usuarioId,
-                nivel: 'A'
-            },
-            orderBy: { createdAt: 'desc' }
-        });
-
-        const comissoesB = await prisma.comissao.findMany({
-            where: { 
-                userId: req.usuarioId,
-                nivel: 'B'
-            },
-            orderBy: { createdAt: 'desc' }
-        });
-
-        const comissoesC = await prisma.comissao.findMany({
-            where: { 
-                userId: req.usuarioId,
-                nivel: 'C'
-            },
-            orderBy: { createdAt: 'desc' }
-        });
-
-        res.json({
-            usuario: {
-                ...usuario,
-                receitaDeHoje: receitaDeHoje._sum.valor || 0,
-                rendimentoTotal: rendimentoTotal._sum.valor || 0,
-                totalIndicacoes: indicacoes.length,
-                indicacoes: indicacoes.map(i => ({
-                    id: i.indicado.id,
-                    telefone: i.indicado.telefone,
-                    dataIndicacao: i.dataIndicacao
-                })),
-                comissoes: {
-                    nivelA: comissoesA.map(c => ({
-                        valor: c.valor,
-                        investimentoId: c.investimentoId,
-                        valorInvestimento: c.valorInvestimento,
-                        data: c.createdAt
-                    })),
-                    nivelB: comissoesB.map(c => ({
-                        valor: c.valor,
-                        investimentoId: c.investimentoId,
-                        valorInvestimento: c.valorInvestimento,
-                        data: c.createdAt
-                    })),
-                    nivelC: comissoesC.map(c => ({
-                        valor: c.valor,
-                        investimentoId: c.investimentoId,
-                        valorInvestimento: c.valorInvestimento,
-                        data: c.createdAt
-                    }))
-                }
-            }
-        });
-    } catch (err) {
-        console.error("Erro em /me:", err);
-        res.status(500).json({ mensagem: "Erro interno", erro: err.message });
-    }
-});
-// Conta bancária - Adicionar/Atualizar
-app.post('/iban', async (req, res) => {
-    const { bank, account_number, account_holder } = req.body;
-    
-    if (!bank || !account_number || !account_holder) {
-        return res.status(400).json({ 
+        console.error("Erro no login:", error);
+        res.status(500).json({
             success: false,
-            message: "Banco, número da conta e nome do titular são obrigatórios" 
-        });
-    }
-
-    const bancosValidos = ['BFA', 'BAI', 'BIC', 'ATL'];
-    if (!bancosValidos.includes(bank)) {
-        return res.status(400).json({ 
-            success: false,
-            message: "Banco inválido. Escolha entre BFA, BAI, BIC ou ATL" 
-        });
-    }
-
-    if (!/^\d{21}$/.test(account_number)) {
-        return res.status(400).json({ 
-            success: false,
-            message: "Número da conta deve conter exatamente 21 dígitos" 
-        });
-    }
-
-    try {
-        const contaExistente = await prisma.bankAccount.findFirst({
-            where: { userId: req.usuarioId }
-        });
-
-        if (contaExistente) {
-            const contaAtualizada = await prisma.bankAccount.update({
-                where: { id: contaExistente.id },
-                data: {
-                    bank,
-                    account_number,
-                    account_holder,
-                    updated_at: new Date()
-                }
-            });
-
-            return res.json({
-                success: true,
-                message: "Conta bancária atualizada com sucesso",
-                account: contaAtualizada
-            });
-        } else {
-            const novaConta = await prisma.bankAccount.create({
-                data: {
-                    bank,
-                    account_number,
-                    account_holder,
-                    userId: req.usuarioId
-                }
-            });
-
-            return res.json({
-                success: true,
-                message: "Conta bancária cadastrada com sucesso",
-                account: novaConta
-            });
-        }
-    } catch (error) {
-        console.error("Erro ao cadastrar conta bancária:", error);
-        return res.status(500).json({ 
-            success: false,
-            message: "Erro ao cadastrar conta bancária",
-            error: error.message 
-        });
-    }
-});
-
-// Obter conta bancária
-app.get('/iban', async (req, res) => {
-    try {
-        const conta = await prisma.bankAccount.findFirst({
-            where: { userId: req.usuarioId },
-            select: {
-                id: true,
-                bank: true,
-                account_number: true,
-                account_holder: true,
-                created_at: true,
-                updated_at: true
-            }
-        });
-
-        if (!conta) {
-            return res.status(404).json({ 
-                success: false,
-                message: "Nenhuma conta bancária cadastrada" 
-            });
-        }
-
-        return res.json({ success: true, account: conta });
-    } catch (error) {
-        console.error("Erro ao buscar conta bancária:", error);
-        return res.status(500).json({ 
-            success: false,
-            message: "Erro ao buscar conta bancária",
-            error: error.message 
-        });
-    }
-});
-
-// ================== SISTEMA DE SAQUES ================== //
-
-// Criar solicitação de saque
-app.post('/withdrawals', async (req, res) => {
-    const { bank_account_id, amount } = req.body;
-    
-    // Validações básicas
-    if (!bank_account_id || !amount) {
-        return res.status(400).json({ 
-            success: false,
-            message: "Conta bancária e valor são obrigatórios" 
-        });
-    }
-    
-    if (amount < 1200) {
-        return res.status(400).json({ 
-            success: false,
-            message: "O valor mínimo para saque é KZ1,200.00" 
-        });
-    }
-    
-    if (amount > 100000) {
-        return res.status(400).json({ 
-            success: false,
-            message: "O valor máximo para saque é KZ100,000.00" 
-        });
-    }
-    
-    try {
-        // Verificar se é dia permitido (segunda a sábado)
-        const hoje = new Date();
-        const diaSemana = hoje.getDay(); // 0=Domingo, 1=Segunda, ..., 6=Sábado
-        
-        if (diaSemana === 0) { // Domingo
-            return res.status(400).json({ 
-                success: false,
-                message: "Saques não são processados aos domingos" 
-            });
-        }
-
-        // Verificar conta bancária
-        const bankAccount = await prisma.bankAccount.findFirst({
-            where: {
-                id: bank_account_id,
-                userId: req.usuarioId
-            }
-        });
-        
-        if (!bankAccount) {
-            return res.status(404).json({ 
-                success: false,
-                message: "Conta bancária não encontrada" 
-            });
-        }
-        
-        // Verificar saldo
-        const user = await prisma.user.findUnique({
-            where: { id: req.usuarioId },
-            select: { saldo: true }
-        });
-        
-        if (user.saldo < amount) {
-            return res.status(400).json({ 
-                success: false,
-                message: "Saldo insuficiente para este saque" 
-            });
-        }
-        
-        // Calcular taxa (10%) e valor líquido
-        const fee = amount * 0.1;
-        const net_amount = amount - fee;
-        
-        // Criar retirada
-        const withdrawal = await prisma.withdrawal.create({
-            data: {
-                amount,
-                fee,
-                net_amount,
-                status: "pending",
-                bank_account_id,
-                user_id: req.usuarioId
-            }
-        });
-        
-        // Atualizar saldo do usuário
-        await prisma.user.update({
-            where: { id: req.usuarioId },
-            data: { saldo: { decrement: amount } }
-        });
-        
-        res.json({
-            success: true,
-            message: "Saque solicitado com sucesso",
-            withdrawal
-        });
-        
-    } catch (error) {
-        console.error("Erro ao criar retirada:", error);
-        res.status(500).json({ 
-            success: false,
-            message: "Erro ao solicitar saque",
-            error: error.message 
-        });
-    }
-});
-
-// Listar retiradas do usuário
-app.get('/withdrawals', async (req, res) => {
-    try {
-        const withdrawals = await prisma.withdrawal.findMany({
-            where: { user_id: req.usuarioId },
-            include: { bank_account: true },
-            orderBy: { created_at: 'desc' }
-        });
-        
-        res.json({ success: true, withdrawals });
-    } catch (error) {
-        console.error("Erro ao buscar retiradas:", error);
-        res.status(500).json({ 
-            success: false,
-            message: "Erro ao buscar retiradas",
-            error: error.message 
-        });
-    }
-});
-
-// ================== SISTEMA DE INDICAÇÕES ================== //
-
-// Obter informações sobre indicações
-app.get('/indicacoes', async (req, res) => {
-    try {
-        // Total de indicações
-        const totalIndicacoes = await prisma.indicacao.count({
-            where: { indicadorId: req.usuarioId }
-        });
-
-        // Indicações recentes (últimas 5)
-        const indicacoesRecentes = await prisma.indicacao.findMany({
-            where: { indicadorId: req.usuarioId },
-            include: { indicado: true },
-            orderBy: { dataIndicacao: 'desc' },
-            take: 5
-        });
-
-        // Total de bônus recebidos por indicações
-        const bonusIndicacoes = totalIndicacoes * 500; // 500 por indicação
-
-        res.json({
-            success: true,
-            totalIndicacoes,
-            bonusIndicacoes,
-            indicacoesRecentes: indicacoesRecentes.map(i => ({
-                id: i.indicado.id,
-                telefone: i.indicado.telefone,
-                dataIndicacao: i.dataIndicacao,
-                codigoConviteUtilizado: i.codigoConviteUtilizado
-            }))
-        });
-    } catch (error) {
-        console.error("Erro ao buscar indicações:", error);
-        res.status(500).json({ 
-            success: false,
-            message: "Erro ao buscar informações de indicações",
-            error: error.message 
-        });
-    }
-});
-
-// ================== OUTRAS ROTAS ================== //
-
-// Atualizar saldo
-app.post('/atualizar-saldo', async (req, res) => {
-    const { valor } = req.body;
-    
-    try {
-        const usuario = await prisma.user.update({
-            where: { id: req.usuarioId },
-            data: { saldo: { increment: valor } }
-        });
-        
-        res.json({ success: true, novoSaldo: usuario.saldo });
-    } catch (error) {
-        res.status(400).json({ 
-            success: false,
-            message: "Erro ao atualizar saldo",
+            mensagem: "Erro ao fazer login!",
             error: error.message
         });
     }
 });
-
-// Registrar investimento
-// Registrar investimento
-app.post('/investir', async (req, res) => {
-    const { produto, valor, data } = req.body;
-    
+// Rota para verificar telefone
+app.post('/usuarios/verificar', async (req, res) => {
     try {
-        const usuario = await prisma.user.findUnique({
-            where: { id: req.usuarioId },
-            select: { saldo: true, referenciadoPor: true }
-        });
-
-        if (usuario.saldo < valor) {
-            return res.status(400).json({
+        const { telefone } = req.body;
+        
+        if (!telefone) {
+            return res.status(400).json({ 
                 success: false,
-                message: "Saldo insuficiente para este investimento"
+                mensagem: "Telefone é obrigatório!" 
             });
         }
 
-        // Atualizar saldo do usuário
-        await prisma.user.update({
-            where: { id: req.usuarioId },
-            data: { saldo: { decrement: valor } }
+        const usuarioExistente = await prisma.user.findUnique({
+            where: { telefone }
         });
-
-        // Registrar o investimento
-        const investimento = await prisma.investimento.create({
-            data: {
-                produto,
-                valor,
-                data: new Date(data),
-                userId: req.usuarioId,
-                ultimoPagamento: new Date(data)
-            }
-        });
-
-        // Distribuir bônus para os níveis A, B e C
-        await distribuirBonus(req.usuarioId, valor);
 
         res.json({ 
             success: true,
-            investimento,
-            message: "Investimento realizado com sucesso!"
+            existe: !!usuarioExistente 
         });
     } catch (error) {
-        res.status(400).json({ 
+        console.error("Erro ao verificar telefone:", error);
+        res.status(500).json({ 
             success: false,
-            message: "Erro ao registrar investimento",
-            error: error.message
+            mensagem: "Erro ao verificar telefone",
+            error: error.message 
         });
     }
 });
 
-// Função para distribuir bônus nos 3 níveis
-async function distribuirBonus(userId, valorInvestimento) {
+// Rota para obter dados da equipe (3 níveis)
+app.get('/user/team', authenticateJWT, async (req, res) => {
     try {
-        // Encontrar o usuário atual
-        const usuarioAtual = await prisma.user.findUnique({
-            where: { id: userId },
-            select: { referenciadoPor: true }
-        });
+        const userId = req.user.id;
 
-        if (!usuarioAtual || !usuarioAtual.referenciadoPor) {
-            return; // Não há referenciador, não distribui bônus
-        }
-
-        // Nível A (indicador direto)
-        const nivelA = await prisma.user.findUnique({
-            where: { id: usuarioAtual.referenciadoPor }
-        });
-
-        if (nivelA) {
-            const bonusA = valorInvestimento * 0.30; // 30%
-            await prisma.user.update({
-                where: { id: nivelA.id },
-                data: { 
-                    saldo: { increment: bonusA } 
-                }
-            });
-
-            // Registrar a comissão
-            await prisma.comissao.create({
-                data: {
-                    userId: nivelA.id,
-                    valor: bonusA,
-                    nivel: 'A',
-                    investimentoId: userId,
-                    valorInvestimento: valorInvestimento
-                }
-            });
-        }
-
-        // Nível B (indicador do indicador)
-        if (nivelA && nivelA.referenciadoPor) {
-            const nivelB = await prisma.user.findUnique({
-                where: { id: nivelA.referenciadoPor }
-            });
-
-            if (nivelB) {
-                const bonusB = valorInvestimento * 0.06; // 6%
-                await prisma.user.update({
-                    where: { id: nivelB.id },
-                    data: { 
-                        saldo: { increment: bonusB } 
+        // Nível 1 - indicados diretos
+        const level1 = await prisma.indicacao.findMany({
+            where: { indicadorId: userId },
+            select: {
+                indicado: {
+                    select: {
+                        id: true,
+                        telefone: true,
+                        saldo: true,
+                        criadoEm: true
                     }
-                });
-
-                // Registrar a comissão
-                await prisma.comissao.create({
-                    data: {
-                        userId: nivelB.id,
-                        valor: bonusB,
-                        nivel: 'B',
-                        investimentoId: userId,
-                        valorInvestimento: valorInvestimento
-                    }
-                });
-            }
-        }
-
-        // Nível C (indicador do indicador do indicador)
-        if (nivelA && nivelA.referenciadoPor) {
-            const nivelB = await prisma.user.findUnique({
-                where: { id: nivelA.referenciadoPor }
-            });
-
-            if (nivelB && nivelB.referenciadoPor) {
-                const nivelC = await prisma.user.findUnique({
-                    where: { id: nivelB.referenciadoPor }
-                });
-
-                if (nivelC) {
-                    const bonusC = valorInvestimento * 0.01; // 1%
-                    await prisma.user.update({
-                        where: { id: nivelC.id },
-                        data: { 
-                            saldo: { increment: bonusC } 
-                        }
-                    });
-
-                    // Registrar a comissão
-                    await prisma.comissao.create({
-                        data: {
-                            userId: nivelC.id,
-                            valor: bonusC,
-                            nivel: 'C',
-                            investimentoId: userId,
-                            valorInvestimento: valorInvestimento
-                        }
-                    });
                 }
             }
-        }
-    } catch (error) {
-        console.error("Erro ao distribuir bônus:", error);
-    }
-}
-// Rota para criar depósito
-app.post('/deposits', autenticarToken, async (req, res) => {
-  try {
-    const { amount, bank, comprovante, fileName, fileType } = req.body;
-
-    // Validações
-    if (!amount || !bank || !comprovante || !fileName || !fileType) {
-      return res.status(400).json({
-        success: false,
-        message: "Todos os campos são obrigatórios"
-      });
-    }
-
-    if (amount < 3500) {
-      return res.status(400).json({
-        success: false,
-        message: "O valor mínimo para depósito é KZ 3.500"
-      });
-    }
-
-    if (!['BAI', 'BFA', 'BIC', 'ATL'].includes(bank)) {
-      return res.status(400).json({
-        success: false,
-        message: "Banco inválido. Escolha entre BAI, BFA, BIC ou ATL"
-      });
-    }
-
-    // Criar o depósito
-    const deposit = await prisma.deposit.create({
-      data: {
-        amount,
-        bank,
-        comprovante,
-        fileName,
-        fileType,
-        userId: req.usuarioId
-      }
-    });
-
-    res.json({
-      success: true,
-      message: "Depósito registrado com sucesso. Aguarde confirmação.",
-      deposit
-    });
-
-  } catch (error) {
-    console.error("Erro ao processar depósito:", error);
-    res.status(500).json({
-      success: false,
-      message: "Erro ao processar depósito",
-      error: error.message
-    });
-  }
-});
-
-// Rota para listar depósitos do usuário
-app.get('/deposits', autenticarToken, async (req, res) => {
-  try {
-    const deposits = await prisma.deposit.findMany({
-      where: { userId: req.usuarioId },
-      orderBy: { createdAt: 'desc' }
-    });
-
-    res.json({
-      success: true,
-      deposits
-    });
-
-  } catch (error) {
-    console.error("Erro ao buscar depósitos:", error);
-    res.status(500).json({
-      success: false,
-      message: "Erro ao buscar depósitos",
-      error: error.message
-    });
-  }
-});
-// Rota para trocar senha
-app.post('/change-password', autenticarToken, async (req, res) => {
-    const { currentPassword, newPassword } = req.body;
-
-    try {
-        // Buscar usuário
-        const user = await prisma.user.findUnique({
-            where: { id: req.usuarioId }
         });
 
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: "Usuário não encontrado"
-            });
-        }
+        // Nível 2 - indicados dos indicados
+        const level1Ids = level1.map(i => i.indicado.id);
+        const level2 = await prisma.indicacao.findMany({
+            where: { indicadorId: { in: level1Ids } },
+            select: {
+                indicado: {
+                    select: {
+                        id: true,
+                        telefone: true,
+                        saldo: true,
+                        criadoEm: true
+                    }
+                }
+            }
+        });
 
-        // Verificar senha atual
-        const isPasswordValid = await bcrypt.compare(currentPassword, user.senha);
-        if (!isPasswordValid) {
-            return res.status(401).json({
-                success: false,
-                message: "Senha atual incorreta"
-            });
-        }
-
-        // Validar nova senha
-        if (newPassword.length < 6) {
-            return res.status(400).json({
-                success: false,
-                message: "A senha deve ter pelo menos 6 caracteres"
-            });
-        }
-
-        // Criptografar nova senha
-        const hashedPassword = await bcrypt.hash(newPassword, 10);
-
-        // Atualizar senha
-        await prisma.user.update({
-            where: { id: req.usuarioId },
-            data: { senha: hashedPassword }
+        // Nível 3 - indicados dos indicados dos indicados
+        const level2Ids = level2.map(i => i.indicado.id);
+        const level3 = await prisma.indicacao.findMany({
+            where: { indicadorId: { in: level2Ids } },
+            select: {
+                indicado: {
+                    select: {
+                        id: true,
+                        telefone: true,
+                        saldo: true,
+                        criadoEm: true
+                    }
+                }
+            }
         });
 
         res.json({
             success: true,
-            message: "Senha alterada com sucesso"
+            level1: level1.map(i => i.indicado),
+            level2: level2.map(i => i.indicado),
+            level3: level3.map(i => i.indicado)
         });
 
     } catch (error) {
-        console.error("Erro ao alterar senha:", error);
+        console.error("Erro ao buscar equipe:", error);
         res.status(500).json({
             success: false,
-            message: "Erro ao alterar senha",
+            mensagem: "Erro ao buscar equipe",
             error: error.message
         });
     }
 });
 
-// Listar investimentos
-app.get('/meus-investimentos', async (req, res) => {
+// Rota para comprar produto
+app.post('/products/purchase', authenticateJWT, async (req, res) => {
     try {
-        const investimentos = await prisma.investimento.findMany({
-            where: { userId: req.usuarioId },
-            orderBy: { data: 'desc' }
+        const userId = req.user.id;
+        const { productId } = req.body;
+
+        if (!productId) {
+            return res.status(400).json({
+                success: false,
+                mensagem: "ID do produto é obrigatório!"
+            });
+        }
+
+        const products = {
+            '1': { price: 5000, name: "Pacote Básico", day_income: 200, days: 30 },
+            '2': { price: 10000, name: "Pacote Standard", day_income: 450, days: 60 },
+            '3': { price: 20000, name: "Pacote Premium", day_income: 1000, days: 90 },
+            '4': { price: 50000, name: "Pacote Gold", day_income: 2500, days: 120 },
+            '5': { price: 100000, name: "Pacote Platinum", day_income: 6000, days: 180 },
+            '6': { price: 200000, name: "Pacote Diamond", day_income: 13000, days: 240 },
+            '7': { price: 500000, name: "Pacote VIP", day_income: 35000, days: 360 },
+            '8': { price: 1000000, name: "Pacote Premium VIP", day_income: 80000, days: 720 }
+        };
+
+        const product = products[productId];
+        if (!product) {
+            return res.status(404).json({
+                success: false,
+                mensagem: "Produto não encontrado!"
+            });
+        }
+
+        const result = await prisma.$transaction(async (prisma) => {
+            const user = await prisma.user.findUnique({
+                where: { id: userId },
+                select: { saldo: true, referenciadoPor: true }
+            });
+
+            if (!user) throw new Error("Usuário não encontrado");
+            if (user.saldo < product.price) throw new Error("Saldo insuficiente");
+
+            await prisma.user.update({
+                where: { id: userId },
+                data: { saldo: { decrement: product.price } }
+            });
+
+            const investment = await prisma.investimento.create({
+                data: {
+                    produto: product.name,
+                    valor: product.price,
+                    user: { connect: { id: userId } },
+                    ultimoPagamento: new Date()
+                }
+            });
+
+            if (user.referenciadoPor) {
+                await distributeBonuses(prisma, userId, user.referenciadoPor, product.price, investment.id);
+            }
+
+            return { investment };
         });
 
-        res.json({ success: true, investimentos });
+        invalidateUserCache(userId);
+
+        const updatedUser = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { saldo: true }
+        });
+
+        res.json({
+            success: true,
+            mensagem: "Compra realizada com sucesso!",
+            saldoAtualizado: updatedUser.saldo
+        });
+
     } catch (error) {
+        console.error("Erro ao processar compra:", error);
+
+        if (error.message === "Saldo insuficiente") {
+            return res.status(400).json({
+                success: false,
+                mensagem: "Saldo insuficiente para esta compra",
+                redirectTo: "/deposito.html"
+            });
+        }
+
         res.status(500).json({
             success: false,
-            message: "Erro ao buscar investimentos",
+            mensagem: "Erro ao processar compra",
             error: error.message
         });
     }
 });
 
-// Rota de teste
-app.get('/', (req, res) => {
-    res.send('🛡️ Servidor protegido está online!');
+// Função para distribuir bônus para a equipe
+async function distributeBonuses(prisma, userId, referenciadorId, investmentAmount, investmentId) {
+        console.log("🧠 Distribuindo bônus para:", userId, "Referenciador:", referenciadorId);
+
+    // Obter toda a árvore de referência (3 níveis)
+    const user = await prisma.user.findUnique({
+  where: { id: userId },
+  select: { saldo: true, referenciadoPor: true }
 });
 
-// CRON JOB para processar rendimentos
-cron.schedule('* * * * *', () => {
-    console.log('⏰ Executando rendimento automático...');
-    processarRendimentos();
+
+    if (!referenciador) return;
+
+    // Nível 1 - referenciador direto (28%)
+    const bonusNivel1 = investmentAmount * 0.28;
+    await prisma.user.update({
+        where: { id: referenciador.id },
+        data: { saldo: { increment: bonusNivel1 } }
+    });
+
+    await prisma.comissao.create({
+        data: {
+            userId: referenciador.id,
+            valor: bonusNivel1,
+            nivel: "1",
+            investimentoId: investmentId,
+            valorInvestimento: investmentAmount
+        }
+    });
+
+    // Nível 2 - referenciador do referenciador (2%)
+    if (referenciador.referenciadoPor) {
+        const bonusNivel2 = investmentAmount * 0.02;
+        await prisma.user.update({
+            where: { id: referenciador.referenciadoPor },
+            data: { saldo: { increment: bonusNivel2 } }
+        });
+
+        await prisma.comissao.create({
+            data: {
+                userId: referenciador.referenciadoPor,
+                valor: bonusNivel2,
+                nivel: "2",
+                investimentoId: investmentId,
+                valorInvestimento: investmentAmount
+            }
+        });
+
+        // Nível 3 - referenciador do referenciador do referenciador (1%)
+        const nivel2User = await prisma.user.findUnique({
+            where: { id: referenciador.referenciadoPor },
+            select: { referenciadoPor: true }
+        });
+
+        if (nivel2User && nivel2User.referenciadoPor) {
+            const bonusNivel3 = investmentAmount * 0.01;
+            await prisma.user.update({
+                where: { id: nivel2User.referenciadoPor },
+                data: { saldo: { increment: bonusNivel3 } }
+            });
+
+            await prisma.comissao.create({
+                data: {
+                    userId: nivel2User.referenciadoPor,
+                    valor: bonusNivel3,
+                    nivel: "3",
+                    investimentoId: investmentId,
+                    valorInvestimento: investmentAmount
+                }
+            });
+        }
+    }
+
+    // Invalidar cache dos usuários que receberam bônus
+    invalidateUserCache(referenciador.id);
+    if (referenciador.referenciadoPor) {
+        invalidateUserCache(referenciador.referenciadoPor);
+        const nivel2User = await prisma.user.findUnique({
+            where: { id: referenciador.referenciadoPor },
+            select: { referenciadoPor: true }
+        });
+        if (nivel2User && nivel2User.referenciadoPor) {
+            invalidateUserCache(nivel2User.referenciadoPor);
+        }
+    }
+}
+
+// Rota para obter produtos
+app.get('/products', async (req, res) => {
+    try {
+        const products = [
+            { id: '1', name: "Pacote Básico", price: 5000, day_income: 200, days: 30, total_income: 6000 },
+            { id: '2', name: "Pacote Standard", price: 10000, day_income: 450, days: 60, total_income: 27000 },
+            { id: '3', name: "Pacote Premium", price: 20000, day_income: 1000, days: 90, total_income: 90000 },
+            { id: '4', name: "Pacote Gold", price: 50000, day_income: 2500, days: 120, total_income: 300000 },
+            { id: '5', name: "Pacote Platinum", price: 100000, day_income: 6000, days: 180, total_income: 1080000 },
+            { id: '6', name: "Pacote Diamond", price: 200000, day_income: 13000, days: 240, total_income: 3120000 },
+            { id: '7', name: "Pacote VIP", price: 500000, day_income: 35000, days: 360, total_income: 12600000 },
+            { id: '8', name: "Pacote Premium VIP", price: 1000000, day_income: 80000, days: 720, total_income: 57600000 }
+        ];
+
+        res.json({
+            success: true,
+            products
+        });
+    } catch (error) {
+        console.error("Erro ao buscar produtos:", error);
+        res.status(500).json({
+            success: false,
+            mensagem: "Erro ao buscar produtos",
+            error: error.message
+        });
+    }
 });
 
-// Iniciar servidor
-const PORT = process.env.PORT || 3333;
+
+
+// Rota de registro
+app.post('/usuarios', async (req, res) => {
+    try {
+        const { telefone, senha, codigoConvite } = req.body;
+        
+        // Validações básicas
+        if (!telefone || !senha) {
+            return res.status(400).json({
+                success: false,
+                mensagem: "Telefone e senha são obrigatórios!"
+            });
+        }
+
+        if (!telefone.match(/^\+244\d{9}$/)) {
+            return res.status(400).json({
+                success: false,
+                mensagem: "Formato de telefone inválido. Deve ser +244 seguido de 9 dígitos"
+            });
+        }
+
+        if (senha.length < 6) {
+            return res.status(400).json({
+                success: false,
+                mensagem: "A senha deve ter pelo menos 6 caracteres"
+            });
+        }
+
+        // Verificar se usuário já existe
+        const usuarioExistente = await prisma.user.findUnique({
+            where: { telefone }
+        });
+
+        if (usuarioExistente) {
+            return res.status(400).json({
+                success: false,
+                mensagem: "Este telefone já está cadastrado!"
+            });
+        }
+
+        // Criar novo usuário
+        const senhaHash = await bcrypt.hash(senha, 10);
+        const codigoConviteUsuario = Math.random().toString(36).substring(2, 8).toUpperCase();
+
+        const novoUsuario = await prisma.user.create({
+            data: {
+                telefone,
+                senha: senhaHash,
+                codigoConvite: codigoConviteUsuario,
+                saldo: 400,
+                referenciadoPor: null
+            }
+        });
+
+        // Se houver código de convite
+        if (codigoConvite) {
+            const usuarioReferenciador = await prisma.user.findFirst({
+                where: { codigoConvite: codigoConvite }
+            });
+
+            if (usuarioReferenciador) {
+                await prisma.user.update({
+                    where: { id: usuarioReferenciador.id },
+                    data: { saldo: { increment: 500 } }
+                });
+
+                await prisma.indicacao.create({
+                    data: {
+                        indicadorId: usuarioReferenciador.id,
+                        indicadoId: novoUsuario.id,
+                        codigoConvite: codigoConvite
+                    }
+                });
+            }
+        }
+
+        // Gerar token JWT
+        const token = jwt.sign({ id: novoUsuario.id }, 'SEGREDO_SUPER_SECRETO', { expiresIn: '7d' });
+
+        res.status(201).json({
+            success: true,
+            mensagem: "Usuário criado com sucesso!",
+            usuario: {
+                id: novoUsuario.id,
+                telefone: novoUsuario.telefone,
+                codigoConvite: novoUsuario.codigoConvite,
+                saldo: novoUsuario.saldo
+            },
+            token
+        });
+
+    } catch (error) {
+        console.error("Erro ao criar usuário:", error);
+        res.status(500).json({
+            success: false,
+            mensagem: "Erro ao criar usuário!",
+            error: error.message
+        });
+    }
+});
+
 app.listen(PORT, () => {
-    console.log(`✅ Servidor rodando em http://localhost:${PORT}`);
+    console.log(`Servidor rodando na porta ${PORT}`);
 });
