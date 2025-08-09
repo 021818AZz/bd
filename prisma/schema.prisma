@@ -29,6 +29,8 @@ model User {
   deposits          Deposit[]
   withdrawals       Withdrawal[]
   comissoes         Comissao[]
+    gameBets GameBet[]
+
 }
 
 model Indicacao {
@@ -124,4 +126,20 @@ model Comissao {
 
   @@index([userId])
   @@index([investimentoId])
+}
+
+model GameBet {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId     String   @db.ObjectId
+  user       User     @relation(fields: [userId], references: [id])
+
+  amount     Float
+  gameType   String
+  winAmount  Float
+  reels      String   // Armazena JSON.stringify(result.reels)
+  symbols    String   // Armazena JSON.stringify(result.symbols)
+
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
 }

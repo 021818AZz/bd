@@ -636,14 +636,14 @@ async function distributeBonuses(prisma, userId, referenciadorId, investmentAmou
 app.get('/products', async (req, res) => {
     try {
         const products = [
-            { id: '1', name: "Pacote Básico", price: 5000, day_income: 200, days: 30, total_income: 6000 },
-            { id: '2', name: "Pacote Standard", price: 10000, day_income: 450, days: 60, total_income: 27000 },
-            { id: '3', name: "Pacote Premium", price: 20000, day_income: 1000, days: 90, total_income: 90000 },
-            { id: '4', name: "Pacote Gold", price: 50000, day_income: 2500, days: 120, total_income: 300000 },
-            { id: '5', name: "Pacote Platinum", price: 100000, day_income: 6000, days: 180, total_income: 1080000 },
-            { id: '6', name: "Pacote Diamond", price: 200000, day_income: 13000, days: 240, total_income: 3120000 },
-            { id: '7', name: "Pacote VIP", price: 500000, day_income: 35000, days: 360, total_income: 12600000 },
-            { id: '8', name: "Pacote Premium VIP", price: 1000000, day_income: 80000, days: 720, total_income: 57600000 }
+            { id: '1', name: "Projeto 1", price: 5000, day_income: 600, days: 50, total_income: 30000 },
+            { id: '2', name: "Projeto 2", price: 10000, day_income: 1200, days: 50, total_income: 60000 },
+            { id: '3', name: "Projeto 3", price: 30000, day_income: 3600, days: 50, total_income: 180000 },
+            { id: '4', name: "Projeto 4", price: 50000, day_income: 6000, days: 50, total_income: 300000 },
+            { id: '5', name: "Projeto 5", price: 100000, day_income: 12000, days: 50, total_income: 600000 },
+            { id: '6', name: "Projeto 6", price: 150000, day_income: 18000, days: 50, total_income: 900000 },
+            { id: '7', name: "Projeto 7", price: 300000, day_income: 36000, days: 50, total_income: 1800000 },
+            { id: '8', name: "Projeto 8", price: 600000, day_income: 72000, days: 50, total_income: 3600000 }
         ];
 
         res.json({
@@ -659,6 +659,74 @@ app.get('/products', async (req, res) => {
         });
     }
 });
+
+app.post("/game/bet", authenticateJWT, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { amount, gameType, result } = req.body;
+
+        // Validações básicas
+        if (!amount || !gameType || !result) {
+            return res.status(400).json({
+                success: false,
+                mensagem: "Dados da aposta incompletos!"
+            });
+        }
+
+        // Lógica para processar a aposta e atualizar o saldo do usuário
+        // Exemplo: Decrementar saldo pela aposta e incrementar pela vitória
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { saldo: true }
+        });
+
+        if (!user) {
+            return res.status(404).json({ success: false, mensagem: "Usuário não encontrado" });
+        }
+
+        let newBalance = user.saldo - amount; // Deduz o valor da aposta
+
+        // Se houver vitória, adiciona o valor ganho
+        if (result.winAmount && result.winAmount > 0) {
+            newBalance += result.winAmount;
+        }
+
+        await prisma.user.update({
+            where: { id: userId },
+            data: { saldo: newBalance }
+        });
+
+        // Opcional: Registrar a aposta no banco de dados
+        await prisma.gameBet.create({
+            data: {
+                userId: userId,
+                amount: amount,
+                gameType: gameType,
+                winAmount: result.winAmount || 0,
+                reels: JSON.stringify(result.reels), // Salva o resultado dos rolos
+                symbols: JSON.stringify(result.symbols) // Salva os símbolos
+            }
+        });
+
+        // Invalida o cache do usuário para que o saldo seja atualizado
+        invalidateUserCache(userId);
+
+        res.json({
+            success: true,
+            mensagem: "Aposta processada com sucesso!",
+            newBalance: newBalance
+        });
+
+    } catch (error) {
+        console.error("Erro ao processar aposta:", error);
+        res.status(500).json({
+            success: false,
+            mensagem: "Erro interno ao processar aposta",
+            error: error.message
+        });
+    }
+});
+
 
 // Rota de registro
 app.post('/usuarios', async (req, res) => {
