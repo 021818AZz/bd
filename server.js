@@ -673,9 +673,8 @@ app.post("/game/bet", authenticateJWT, async (req, res) => {
             });
         }
 
-        // Lógica para processar a aposta e atualizar o saldo do usuário
-        // Exemplo: Decrementar saldo pela aposta e incrementar pela vitória
-        const user = await prisma.user.findUnique({
+        // Busca o saldo do usuário
+        const user = await prisma.User.findUnique({
             where: { id: userId },
             select: { saldo: true }
         });
@@ -691,13 +690,13 @@ app.post("/game/bet", authenticateJWT, async (req, res) => {
             newBalance += result.winAmount;
         }
 
-        await prisma.user.update({
+        await prisma.User.update({
             where: { id: userId },
             data: { saldo: newBalance }
         });
 
-        // Opcional: Registrar a aposta no banco de dados
-        await prisma.gameBet.create({
+        // Registrar a aposta no banco de dados
+        await prisma.GameBet.create({
             data: {
                 userId: userId,
                 amount: amount,
@@ -726,6 +725,7 @@ app.post("/game/bet", authenticateJWT, async (req, res) => {
         });
     }
 });
+
 
 
 // Rota de registro
