@@ -696,7 +696,9 @@ app.post("/game/bet", authenticateJWT, async (req, res) => {
         });
 
         // Registrar a aposta no banco de dados
-        await prisma.GameBet.create({
+        prisma.gameBet.create({
+
+
             data: {
                 userId: userId,
                 amount: amount,
