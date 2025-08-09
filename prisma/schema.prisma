@@ -29,7 +29,7 @@ model User {
   deposits          Deposit[]
   withdrawals       Withdrawal[]
   comissoes         Comissao[]
-    gameBets GameBet[]
+  gameBets          GameBet[]
 
 }
 
