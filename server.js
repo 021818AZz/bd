@@ -3,15 +3,31 @@ const cors = require('cors');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
+const NodeCache = require('node-cache');
 
 const prisma = new PrismaClient();
 const app = express();
 const PORT = 3333;
+
+// Configuração do cache com TTL de 30 segundos
+const cache = new NodeCache({ stdTTL: 30, checkperiod: 60 });
+
+// Middleware para invalidar cache do usuário
+const invalidateUserCache = (userId) => {
+    const userCacheKeys = [
+        `user_${userId}_data`,
+        `user_${userId}_balance`,
+        `user_${userId}_team`,
+        `user_${userId}_investments`
+    ];
+    cache.del(userCacheKeys);
+};
+
 // Configuração do CORS e JSON
 app.use(cors());
 app.use(express.json());
 
-// Adicione este middleware para autenticação JWT
+// Middleware de autenticação JWT
 const authenticateJWT = (req, res, next) => {
     const authHeader = req.headers.authorization;
     
@@ -31,11 +47,22 @@ const authenticateJWT = (req, res, next) => {
     }
 };
 
-// Rota para obter saldo e retiradas (protegida por JWT)
+// Rota para obter saldo e retiradas com cache
 app.get('/user/balance', authenticateJWT, async (req, res) => {
     try {
         const userId = req.user.id;
+        const cacheKey = `user_${userId}_balance`;
         
+        // Verificar cache
+        const cachedData = cache.get(cacheKey);
+        if (cachedData) {
+            return res.json({
+                ...cachedData,
+                cached: true,
+                timestamp: new Date()
+            });
+        }
+
         // Busca em paralelo para melhor performance
         const [user, withdrawals] = await Promise.all([
             prisma.user.findUnique({
@@ -55,10 +82,19 @@ app.get('/user/balance', authenticateJWT, async (req, res) => {
             });
         }
 
-        res.json({
+        const responseData = {
             success: true,
             saldo: user.saldo,
             totalRetiradas: withdrawals._sum.amount || 0
+        };
+
+        // Atualizar cache
+        cache.set(cacheKey, responseData);
+
+        res.json({
+            ...responseData,
+            cached: false,
+            timestamp: new Date()
         });
 
     } catch (error) {
@@ -71,38 +107,23 @@ app.get('/user/balance', authenticateJWT, async (req, res) => {
     }
 });
 
-// Versão GET para /user/balance (já existe como GET original)
-app.get('/user/balance', authenticateJWT, (req, res) => {
-  res.send('GET protegida disponível para /user/balance');
-});
-
-// Middleware de erro
-app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).json({ mensagem: 'Erro interno no servidor' });
-});
-
-const NodeCache = require('node-cache');
-const cache = new NodeCache({ stdTTL: 30, checkperiod: 60 }); // Cache de 30 segundos
-
-// Rota /me com cache e otimizações
+// Rota /me com cache otimizado
 app.get('/me', authenticateJWT, async (req, res) => {
     try {
         const userId = req.user.id;
         const cacheKey = `user_${userId}_data`;
 
-        // Verifica se há cache válido
+        // Verificar cache
         const cachedData = cache.get(cacheKey);
         if (cachedData) {
             return res.json({
-                success: true,
                 ...cachedData,
                 cached: true,
                 timestamp: new Date()
             });
         }
 
-        // Busca dados em paralelo com otimizações
+        // Busca em paralelo com índices otimizados
         const [
             user, 
             withdrawals, 
@@ -138,7 +159,7 @@ app.get('/me', authenticateJWT, async (req, res) => {
                     }
                 },
                 orderBy: { created_at: 'desc' },
-                take: 20 // Limita para melhor performance
+                take: 20
             }),
             prisma.deposit.findMany({
                 where: { userId },
@@ -218,8 +239,9 @@ app.get('/me', authenticateJWT, async (req, res) => {
             });
         }
 
-        // Calcula totais
+        // Calcular totais
         const responseData = {
+            success: true,
             user,
             withdrawals,
             deposits,
@@ -236,11 +258,10 @@ app.get('/me', authenticateJWT, async (req, res) => {
             }
         };
 
-        // Atualiza cache
+        // Atualizar cache
         cache.set(cacheKey, responseData);
 
         res.json({
-            success: true,
             ...responseData,
             cached: false,
             timestamp: new Date()
@@ -256,127 +277,21 @@ app.get('/me', authenticateJWT, async (req, res) => {
     }
 });
 
-// Versão GET para /me (já existe como GET original)
-app.get('/me', authenticateJWT, (req, res) => {
-  res.send('GET protegida disponível para /me');
-});
-
-// Middleware para invalidar cache quando houver alterações relevantes
-const invalidateUserCache = (userId) => {
-    const cacheKey = `user_${userId}_data`;
-    cache.del(cacheKey);
-};
-
-// Exemplo de uso em outras rotas que modificam dados:
-app.post('/withdrawals', authenticateJWT, async (req, res) => {
-    try {
-        // ... lógica de criação de retirada
-        invalidateUserCache(req.user.id);
-        // ... resto do código
-    } catch (error) {
-        // ... tratamento de erro
-    }
-});
-
-// Versão GET para /withdrawals
-app.get('/withdrawals', authenticateJWT, (req, res) => {
-  res.send('GET protegida disponível para /withdrawals');
-});
-
-// Rota de login
-app.post('/login', async (req, res) => {
-    try {
-        const { telefone, senha } = req.body;
-        
-        // Validações básicas
-        if (!telefone || !senha) {
-            return res.status(400).json({
-                success: false,
-                mensagem: "Telefone e senha são obrigatórios!"
-            });
-        }
-
-        // Buscar usuário no banco de dados
-        const usuario = await prisma.user.findUnique({
-            where: { telefone }
-        });
-
-        if (!usuario) {
-            return res.status(401).json({
-                success: false,
-                mensagem: "Telefone não cadastrado!"
-            });
-        }
-
-        // Verificar senha
-        const senhaValida = await bcrypt.compare(senha, usuario.senha);
-        
-        if (!senhaValida) {
-            return res.status(401).json({
-                success: false,
-                mensagem: "Senha incorreta!"
-            });
-        }
-
-        // Gerar token JWT
-        const token = jwt.sign({ id: usuario.id }, 'SEGREDO_SUPER_SECRETO', { expiresIn: '7d' });
-
-        res.json({
-            success: true,
-            mensagem: "Login bem-sucedido!",
-            usuario: {
-                id: usuario.id,
-                telefone: usuario.telefone,
-                codigoConvite: usuario.codigoConvite,
-                saldo: usuario.saldo
-            },
-            token
-        });
-
-    } catch (error) {
-        console.error("Erro no login:", error);
-        res.status(500).json({
-            success: false,
-            mensagem: "Erro ao fazer login!",
-            error: error.message
-        });
-    }
-});
-
-// Rota para verificar telefone
-app.post('/usuarios/verificar', async (req, res) => {
-    try {
-        const { telefone } = req.body;
-        
-        if (!telefone) {
-            return res.status(400).json({ 
-                success: false,
-                mensagem: "Telefone é obrigatório!" 
-            });
-        }
-
-        const usuarioExistente = await prisma.user.findUnique({
-            where: { telefone }
-        });
-
-        res.json({ 
-            success: true,
-            existe: !!usuarioExistente 
-        });
-    } catch (error) {
-        console.error("Erro ao verificar telefone:", error);
-        res.status(500).json({ 
-            success: false,
-            mensagem: "Erro ao verificar telefone",
-            error: error.message 
-        });
-    }
-});
-
-// Rota para obter dados da equipe (3 níveis)
+// Rota para equipe com cache
 app.get('/user/team', authenticateJWT, async (req, res) => {
     try {
         const userId = req.user.id;
+        const cacheKey = `user_${userId}_team`;
+
+        // Verificar cache
+        const cachedData = cache.get(cacheKey);
+        if (cachedData) {
+            return res.json({
+                ...cachedData,
+                cached: true,
+                timestamp: new Date()
+            });
+        }
 
         // Nível 1 - indicados diretos
         const level1 = await prisma.indicacao.findMany({
@@ -425,11 +340,20 @@ app.get('/user/team', authenticateJWT, async (req, res) => {
             }
         });
 
-        res.json({
+        const responseData = {
             success: true,
             level1: level1.map(i => i.indicado),
             level2: level2.map(i => i.indicado),
             level3: level3.map(i => i.indicado)
+        };
+
+        // Atualizar cache
+        cache.set(cacheKey, responseData);
+
+        res.json({
+            ...responseData,
+            cached: false,
+            timestamp: new Date()
         });
 
     } catch (error) {
@@ -442,12 +366,7 @@ app.get('/user/team', authenticateJWT, async (req, res) => {
     }
 });
 
-// Versão GET para /user/team (já existe como GET original)
-app.get('/user/team', authenticateJWT, (req, res) => {
-  res.send('GET protegida disponível para /user/team');
-});
-
-// Rota para comprar produto
+// Rota para comprar produto com invalidação de cache
 app.post('/products/purchase', authenticateJWT, async (req, res) => {
     try {
         const userId = req.user.id;
@@ -509,6 +428,7 @@ app.post('/products/purchase', authenticateJWT, async (req, res) => {
             return { investment };
         });
 
+        // Invalida cache do usuário e referenciadores
         invalidateUserCache(userId);
 
         const updatedUser = await prisma.user.findUnique({
@@ -541,19 +461,13 @@ app.post('/products/purchase', authenticateJWT, async (req, res) => {
     }
 });
 
-// Versão GET para /products/purchase
-app.get('/products/purchase', authenticateJWT, (req, res) => {
-  res.send('GET protegida disponível para /products/purchase');
-});
-
-// Função para distribuir bônus para a equipe
+// Função para distribuir bônus com cache
 async function distributeBonuses(prisma, userId, referenciadorId, investmentAmount, investmentId) {
     console.log("🧠 Distribuindo bônus para:", userId, "Referenciador:", referenciadorId);
 
-    // Obter toda a árvore de referência (3 níveis)
-    const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { saldo: true, referenciadoPor: true }
+    // Obter referenciador
+    const referenciador = await prisma.user.findUnique({
+        where: { id: referenciadorId }
     });
 
     if (!referenciador) return;
@@ -632,9 +546,21 @@ async function distributeBonuses(prisma, userId, referenciadorId, investmentAmou
     }
 }
 
-// Rota para obter produtos
+// Rota para produtos com cache
 app.get('/products', async (req, res) => {
     try {
+        const cacheKey = 'products_list';
+        
+        // Verificar cache
+        const cachedData = cache.get(cacheKey);
+        if (cachedData) {
+            return res.json({
+                ...cachedData,
+                cached: true,
+                timestamp: new Date()
+            });
+        }
+
         const products = [
             { id: '1', name: "Projeto 1", price: 5000, day_income: 600, days: 50, total_income: 30000 },
             { id: '2', name: "Projeto 2", price: 10000, day_income: 1200, days: 50, total_income: 60000 },
@@ -646,9 +572,18 @@ app.get('/products', async (req, res) => {
             { id: '8', name: "Projeto 8", price: 600000, day_income: 72000, days: 50, total_income: 3600000 }
         ];
 
-        res.json({
+        const responseData = {
             success: true,
             products
+        };
+
+        // Atualizar cache
+        cache.set(cacheKey, responseData);
+
+        res.json({
+            ...responseData,
+            cached: false,
+            timestamp: new Date()
         });
     } catch (error) {
         console.error("Erro ao buscar produtos:", error);
@@ -660,12 +595,12 @@ app.get('/products', async (req, res) => {
     }
 });
 
+// Rota de aposta com invalidação de cache
 app.post("/game/bet", authenticateJWT, async (req, res) => {
     try {
         const userId = req.user.id;
         const { amount, gameType, result } = req.body;
 
-        // Validações básicas
         if (!amount || !gameType || !result) {
             return res.status(400).json({
                 success: false,
@@ -673,8 +608,7 @@ app.post("/game/bet", authenticateJWT, async (req, res) => {
             });
         }
 
-        // Busca o saldo do usuário
-        const user = await prisma.User.findUnique({
+        const user = await prisma.user.findUnique({
             where: { id: userId },
             select: { saldo: true }
         });
@@ -683,33 +617,28 @@ app.post("/game/bet", authenticateJWT, async (req, res) => {
             return res.status(404).json({ success: false, mensagem: "Usuário não encontrado" });
         }
 
-        let newBalance = user.saldo - amount; // Deduz o valor da aposta
-
-        // Se houver vitória, adiciona o valor ganho
+        let newBalance = user.saldo - amount;
         if (result.winAmount && result.winAmount > 0) {
             newBalance += result.winAmount;
         }
 
-        await prisma.User.update({
+        await prisma.user.update({
             where: { id: userId },
             data: { saldo: newBalance }
         });
 
-        // Registrar a aposta no banco de dados
-        prisma.gameBet.create({
-
-
+        await prisma.gameBet.create({
             data: {
                 userId: userId,
                 amount: amount,
                 gameType: gameType,
                 winAmount: result.winAmount || 0,
-                reels: JSON.stringify(result.reels), // Salva o resultado dos rolos
-                symbols: JSON.stringify(result.symbols) // Salva os símbolos
+                reels: JSON.stringify(result.reels),
+                symbols: JSON.stringify(result.symbols)
             }
         });
 
-        // Invalida o cache do usuário para que o saldo seja atualizado
+        // Invalida cache do usuário
         invalidateUserCache(userId);
 
         res.json({
@@ -728,14 +657,132 @@ app.post("/game/bet", authenticateJWT, async (req, res) => {
     }
 });
 
+// Rota de login com cache para tentativas
+app.post('/login', async (req, res) => {
+    try {
+        const { telefone, senha } = req.body;
+        const cacheKey = `login_attempt_${telefone}`;
+        
+        // Verificar tentativas recentes (proteção contra brute force)
+        const attempts = cache.get(cacheKey) || 0;
+        if (attempts >= 5) {
+            return res.status(429).json({
+                success: false,
+                mensagem: "Muitas tentativas de login. Tente novamente mais tarde."
+            });
+        }
 
+        if (!telefone || !senha) {
+            return res.status(400).json({
+                success: false,
+                mensagem: "Telefone e senha são obrigatórios!"
+            });
+        }
 
-// Rota de registro
+        const usuario = await prisma.user.findUnique({
+            where: { telefone }
+        });
+
+        if (!usuario) {
+            cache.set(cacheKey, attempts + 1, 300); // 5 minutos de bloqueio
+            return res.status(401).json({
+                success: false,
+                mensagem: "Telefone não cadastrado!"
+            });
+        }
+
+        const senhaValida = await bcrypt.compare(senha, usuario.senha);
+        
+        if (!senhaValida) {
+            cache.set(cacheKey, attempts + 1, 300); // 5 minutos de bloqueio
+            return res.status(401).json({
+                success: false,
+                mensagem: "Senha incorreta!"
+            });
+        }
+
+        // Resetar contador de tentativas
+        cache.del(cacheKey);
+
+        const token = jwt.sign({ id: usuario.id }, 'SEGREDO_SUPER_SECRETO', { expiresIn: '7d' });
+
+        res.json({
+            success: true,
+            mensagem: "Login bem-sucedido!",
+            usuario: {
+                id: usuario.id,
+                telefone: usuario.telefone,
+                codigoConvite: usuario.codigoConvite,
+                saldo: usuario.saldo
+            },
+            token
+        });
+
+    } catch (error) {
+        console.error("Erro no login:", error);
+        res.status(500).json({
+            success: false,
+            mensagem: "Erro ao fazer login!",
+            error: error.message
+        });
+    }
+});
+
+// Rota para verificar telefone com cache
+app.post('/usuarios/verificar', async (req, res) => {
+    try {
+        const { telefone } = req.body;
+        const cacheKey = `user_verify_${telefone}`;
+        
+        // Verificar cache
+        const cachedData = cache.get(cacheKey);
+        if (cachedData) {
+            return res.json({
+                ...cachedData,
+                cached: true,
+                timestamp: new Date()
+            });
+        }
+
+        if (!telefone) {
+            return res.status(400).json({ 
+                success: false,
+                mensagem: "Telefone é obrigatório!" 
+            });
+        }
+
+        const usuarioExistente = await prisma.user.findUnique({
+            where: { telefone }
+        });
+
+        const responseData = { 
+            success: true,
+            existe: !!usuarioExistente 
+        };
+
+        // Atualizar cache (cache mais longo para dados que raramente mudam)
+        cache.set(cacheKey, responseData, 600); // 10 minutos
+
+        res.json({
+            ...responseData,
+            cached: false,
+            timestamp: new Date()
+        });
+    } catch (error) {
+        console.error("Erro ao verificar telefone:", error);
+        res.status(500).json({ 
+            success: false,
+            mensagem: "Erro ao verificar telefone",
+            error: error.message 
+        });
+    }
+});
+
+// Rota de registro com invalidação de cache
 app.post('/usuarios', async (req, res) => {
     try {
         const { telefone, senha, codigoConvite } = req.body;
         
-        // Validações básicas
         if (!telefone || !senha) {
             return res.status(400).json({
                 success: false,
@@ -757,7 +804,6 @@ app.post('/usuarios', async (req, res) => {
             });
         }
 
-        // Verificar se usuário já existe
         const usuarioExistente = await prisma.user.findUnique({
             where: { telefone }
         });
@@ -769,7 +815,6 @@ app.post('/usuarios', async (req, res) => {
             });
         }
 
-        // Criar novo usuário
         const senhaHash = await bcrypt.hash(senha, 10);
         const codigoConviteUsuario = Math.random().toString(36).substring(2, 8).toUpperCase();
 
@@ -783,7 +828,6 @@ app.post('/usuarios', async (req, res) => {
             }
         });
 
-        // Se houver código de convite
         if (codigoConvite) {
             const usuarioReferenciador = await prisma.user.findFirst({
                 where: { codigoConvite: codigoConvite }
@@ -802,11 +846,16 @@ app.post('/usuarios', async (req, res) => {
                         codigoConvite: codigoConvite
                     }
                 });
+
+                // Invalida cache do referenciador
+                invalidateUserCache(usuarioReferenciador.id);
             }
         }
 
-        // Gerar token JWT
         const token = jwt.sign({ id: novoUsuario.id }, 'SEGREDO_SUPER_SECRETO', { expiresIn: '7d' });
+
+        // Invalida cache de verificação de telefone
+        cache.del(`user_verify_${telefone}`);
 
         res.status(201).json({
             success: true,
@@ -830,7 +879,11 @@ app.post('/usuarios', async (req, res) => {
     }
 });
 
-// Versão GET para /usuarios (não adicionada pois é uma rota pública de POST)
+// Middleware de erro
+app.use((err, req, res, next) => {
+    console.error(err.stack);
+    res.status(500).json({ mensagem: 'Erro interno no servidor' });
+});
 
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
