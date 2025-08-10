@@ -3,15 +3,18 @@ const cors = require('cors');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
+const NodeCache = require('node-cache');
 
 const prisma = new PrismaClient();
 const app = express();
 const PORT = 3333;
-// Configuração do CORS e JSON
+const cache = new NodeCache({ stdTTL: 300, checkperiod: 120 });
+
+// Configurações básicas
 app.use(cors());
 app.use(express.json());
 
-// Adicione este middleware para autenticação JWT
+// Middleware de autenticação JWT
 const authenticateJWT = (req, res, next) => {
     const authHeader = req.headers.authorization;
     
@@ -31,88 +34,30 @@ const authenticateJWT = (req, res, next) => {
     }
 };
 
-// Rota para obter saldo e retiradas (protegida por JWT)
-app.get('/user/balance', authenticateJWT, async (req, res) => {
-    try {
-        const userId = req.user.id;
-        
-        // Busca em paralelo para melhor performance
-        const [user, withdrawals] = await Promise.all([
-            prisma.user.findUnique({
-                where: { id: userId },
-                select: { saldo: true }
-            }),
-            prisma.withdrawal.aggregate({
-                where: { user_id: userId },
-                _sum: { amount: true }
-            })
-        ]);
+// Função para invalidar cache do usuário
+const invalidateUserCache = (userId) => {
+    cache.del(`user_${userId}_data`);
+    cache.del(`team_${userId}_data`);
+};
 
-        if (!user) {
-            return res.status(404).json({ 
-                success: false,
-                mensagem: "Usuário não encontrado" 
-            });
-        }
-
-        res.json({
-            success: true,
-            saldo: user.saldo,
-            totalRetiradas: withdrawals._sum.amount || 0
-        });
-
-    } catch (error) {
-        console.error("Erro ao buscar saldo:", error);
-        res.status(500).json({
-            success: false,
-            mensagem: "Erro ao buscar saldo",
-            error: error.message
-        });
-    }
-});
-
-// Versão GET para /user/balance (já existe como GET original)
-app.get('/user/balance', authenticateJWT, (req, res) => {
-  res.send('GET protegida disponível para /user/balance');
-});
-
-// Middleware de erro
-app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).json({ mensagem: 'Erro interno no servidor' });
-});
-
-const NodeCache = require('node-cache');
-const cache = new NodeCache({ stdTTL: 30, checkperiod: 60 }); // Cache de 30 segundos
-
-// Rota /me com cache e otimizações
+// Rota para dados do usuário (com cache)
 app.get('/me', authenticateJWT, async (req, res) => {
     try {
         const userId = req.user.id;
         const cacheKey = `user_${userId}_data`;
 
-        // Verifica se há cache válido
+        // Verificar cache
         const cachedData = cache.get(cacheKey);
         if (cachedData) {
             return res.json({
                 success: true,
                 ...cachedData,
-                cached: true,
-                timestamp: new Date()
+                cached: true
             });
         }
 
-        // Busca dados em paralelo com otimizações
-        const [
-            user, 
-            withdrawals, 
-            deposits, 
-            bankAccounts, 
-            investments, 
-            earnings, 
-            referrals, 
-            commissions
-        ] = await Promise.all([
+        // Buscar dados em paralelo
+        const [user, withdrawals, deposits, bankAccounts, investments, earnings, referrals, commissions] = await Promise.all([
             prisma.user.findUnique({
                 where: { id: userId },
                 select: {
@@ -129,16 +74,9 @@ app.get('/me', authenticateJWT, async (req, res) => {
                     id: true,
                     amount: true,
                     status: true,
-                    created_at: true,
-                    bank_account: {
-                        select: {
-                            bank: true,
-                            account_number: true
-                        }
-                    }
+                    created_at: true
                 },
-                orderBy: { created_at: 'desc' },
-                take: 20 // Limita para melhor performance
+                take: 20
             }),
             prisma.deposit.findMany({
                 where: { userId },
@@ -146,10 +84,8 @@ app.get('/me', authenticateJWT, async (req, res) => {
                     id: true,
                     amount: true,
                     status: true,
-                    createdAt: true,
-                    bank: true
+                    createdAt: true
                 },
-                orderBy: { createdAt: 'desc' },
                 take: 20
             }),
             prisma.bankAccount.findMany({
@@ -157,8 +93,7 @@ app.get('/me', authenticateJWT, async (req, res) => {
                 select: {
                     id: true,
                     bank: true,
-                    account_number: true,
-                    account_holder: true
+                    account_number: true
                 }
             }),
             prisma.investimento.findMany({
@@ -169,7 +104,6 @@ app.get('/me', authenticateJWT, async (req, res) => {
                     valor: true,
                     data: true
                 },
-                orderBy: { data: 'desc' },
                 take: 10
             }),
             prisma.rendimento.findMany({
@@ -179,7 +113,6 @@ app.get('/me', authenticateJWT, async (req, res) => {
                     valor: true,
                     data: true
                 },
-                orderBy: { data: 'desc' },
                 take: 20
             }),
             prisma.indicacao.findMany({
@@ -189,12 +122,10 @@ app.get('/me', authenticateJWT, async (req, res) => {
                     indicado: {
                         select: {
                             telefone: true,
-                            criadoEm: true,
-                            saldo: true
+                            criadoEm: true
                         }
                     }
                 },
-                orderBy: { dataIndicacao: 'desc' },
                 take: 20
             }),
             prisma.comissao.findMany({
@@ -203,10 +134,8 @@ app.get('/me', authenticateJWT, async (req, res) => {
                     id: true,
                     valor: true,
                     nivel: true,
-                    createdAt: true,
-                    valorInvestimento: true
+                    createdAt: true
                 },
-                orderBy: { createdAt: 'desc' },
                 take: 20
             })
         ]);
@@ -218,7 +147,7 @@ app.get('/me', authenticateJWT, async (req, res) => {
             });
         }
 
-        // Calcula totais
+        // Preparar resposta
         const responseData = {
             user,
             withdrawals,
@@ -232,18 +161,18 @@ app.get('/me', authenticateJWT, async (req, res) => {
                 withdrawals: withdrawals.reduce((sum, w) => sum + w.amount, 0),
                 deposits: deposits.reduce((sum, d) => sum + (d.status === 'approved' ? d.amount : 0), 0),
                 earnings: earnings.reduce((sum, e) => sum + e.valor, 0),
-                commissions: commissions.reduce((sum, c) => sum + c.valor, 0)
+                teamCommissions: commissions.reduce((sum, c) => sum + c.valor, 0),
+                site_http: "http://popmtr.org" // URL do site
             }
         };
 
-        // Atualiza cache
+        // Armazenar em cache por 5 minutos
         cache.set(cacheKey, responseData);
 
         res.json({
             success: true,
             ...responseData,
-            cached: false,
-            timestamp: new Date()
+            cached: false
         });
 
     } catch (error) {
@@ -256,31 +185,129 @@ app.get('/me', authenticateJWT, async (req, res) => {
     }
 });
 
-// Versão GET para /me (já existe como GET original)
-app.get('/me', authenticateJWT, (req, res) => {
-  res.send('GET protegida disponível para /me');
-});
-
-// Middleware para invalidar cache quando houver alterações relevantes
-const invalidateUserCache = (userId) => {
-    const cacheKey = `user_${userId}_data`;
-    cache.del(cacheKey);
-};
-
-// Exemplo de uso em outras rotas que modificam dados:
-app.post('/withdrawals', authenticateJWT, async (req, res) => {
+// Rota otimizada para dados da equipe (com cache)
+app.get('/user/team', authenticateJWT, async (req, res) => {
     try {
-        // ... lógica de criação de retirada
-        invalidateUserCache(req.user.id);
-        // ... resto do código
-    } catch (error) {
-        // ... tratamento de erro
-    }
-});
+        const userId = req.user.id;
+        const cacheKey = `team_${userId}_data`;
 
-// Versão GET para /withdrawals
-app.get('/withdrawals', authenticateJWT, (req, res) => {
-  res.send('GET protegida disponível para /withdrawals');
+        // Verificar cache
+        const cachedData = cache.get(cacheKey);
+        if (cachedData) {
+            return res.json({
+                success: true,
+                ...cachedData,
+                cached: true
+            });
+        }
+
+        // Buscar todos os níveis em consultas otimizadas
+        const [level1, level2, level3, commissions] = await Promise.all([
+            // Nível 1 - indicados diretos
+            prisma.$queryRaw`
+                SELECT 
+                    u.id, 
+                    u.telefone, 
+                    u.saldo, 
+                    u.criadoEm,
+                    COALESCE(SUM(c.valor), 0) as comissao
+                FROM User u
+                JOIN Indicacao i ON u.id = i.indicadoId
+                LEFT JOIN Comissao c ON c.userId = ${userId} 
+                    AND c.investimentoId IN (
+                        SELECT id FROM Investimento WHERE userId = u.id
+                    )
+                WHERE i.indicadorId = ${userId}
+                GROUP BY u.id
+            `,
+            
+            // Nível 2 - indicados dos indicados
+            prisma.$queryRaw`
+                SELECT 
+                    u.id, 
+                    u.telefone, 
+                    u.saldo, 
+                    u.criadoEm,
+                    COALESCE(SUM(c.valor), 0) as comissao
+                FROM User u
+                JOIN Indicacao i2 ON u.id = i2.indicadoId
+                JOIN Indicacao i1 ON i2.indicadorId = i1.indicadoId
+                LEFT JOIN Comissao c ON c.userId = ${userId} 
+                    AND c.investimentoId IN (
+                        SELECT id FROM Investimento WHERE userId = u.id
+                    )
+                WHERE i1.indicadorId = ${userId}
+                GROUP BY u.id
+            `,
+            
+            // Nível 3 - indicados dos indicados dos indicados
+            prisma.$queryRaw`
+                SELECT 
+                    u.id, 
+                    u.telefone, 
+                    u.saldo, 
+                    u.criadoEm,
+                    COALESCE(SUM(c.valor), 0) as comissao
+                FROM User u
+                JOIN Indicacao i3 ON u.id = i3.indicadoId
+                JOIN Indicacao i2 ON i3.indicadorId = i2.indicadoId
+                JOIN Indicacao i1 ON i2.indicadorId = i1.indicadoId
+                LEFT JOIN Comissao c ON c.userId = ${userId} 
+                    AND c.investimentoId IN (
+                        SELECT id FROM Investimento WHERE userId = u.id
+                    )
+                WHERE i1.indicadorId = ${userId}
+                GROUP BY u.id
+            `,
+            
+            // Comissões totais por nível
+            prisma.$queryRaw`
+                SELECT 
+                    nivel,
+                    COALESCE(SUM(valor), 0) as total
+                FROM Comissao
+                WHERE userId = ${userId}
+                GROUP BY nivel
+            `
+        ]);
+
+        // Processar totais de comissão
+        const commissionTotals = {
+            level1: 0,
+            level2: 0,
+            level3: 0
+        };
+
+        commissions.forEach(row => {
+            if (row.nivel === '1') commissionTotals.level1 = parseFloat(row.total);
+            if (row.nivel === '2') commissionTotals.level2 = parseFloat(row.total);
+            if (row.nivel === '3') commissionTotals.level3 = parseFloat(row.total);
+        });
+
+        const responseData = {
+            level1,
+            level2,
+            level3,
+            commissions: commissionTotals
+        };
+
+        // Armazenar em cache por 5 minutos
+        cache.set(cacheKey, responseData);
+
+        res.json({
+            success: true,
+            ...responseData,
+            cached: false
+        });
+
+    } catch (error) {
+        console.error("Erro ao buscar equipe:", error);
+        res.status(500).json({
+            success: false,
+            mensagem: "Erro ao buscar equipe",
+            error: error.message
+        });
+    }
 });
 
 // Rota de login
@@ -288,7 +315,6 @@ app.post('/login', async (req, res) => {
     try {
         const { telefone, senha } = req.body;
         
-        // Validações básicas
         if (!telefone || !senha) {
             return res.status(400).json({
                 success: false,
@@ -296,7 +322,6 @@ app.post('/login', async (req, res) => {
             });
         }
 
-        // Buscar usuário no banco de dados
         const usuario = await prisma.user.findUnique({
             where: { telefone }
         });
@@ -308,7 +333,6 @@ app.post('/login', async (req, res) => {
             });
         }
 
-        // Verificar senha
         const senhaValida = await bcrypt.compare(senha, usuario.senha);
         
         if (!senhaValida) {
@@ -318,7 +342,6 @@ app.post('/login', async (req, res) => {
             });
         }
 
-        // Gerar token JWT
         const token = jwt.sign({ id: usuario.id }, 'SEGREDO_SUPER_SECRETO', { expiresIn: '7d' });
 
         res.json({
@@ -343,15 +366,29 @@ app.post('/login', async (req, res) => {
     }
 });
 
-// Rota para verificar telefone
-app.post('/usuarios/verificar', async (req, res) => {
+// Rota de registro
+app.post('/usuarios', async (req, res) => {
     try {
-        const { telefone } = req.body;
+        const { telefone, senha, codigoConvite } = req.body;
         
-        if (!telefone) {
-            return res.status(400).json({ 
+        if (!telefone || !senha) {
+            return res.status(400).json({
                 success: false,
-                mensagem: "Telefone é obrigatório!" 
+                mensagem: "Telefone e senha são obrigatórios!"
+            });
+        }
+
+        if (!telefone.match(/^\+244\d{9}$/)) {
+            return res.status(400).json({
+                success: false,
+                mensagem: "Formato de telefone inválido. Deve ser +244 seguido de 9 dígitos"
+            });
+        }
+
+        if (senha.length < 6) {
+            return res.status(400).json({
+                success: false,
+                mensagem: "A senha deve ter pelo menos 6 caracteres"
             });
         }
 
@@ -359,95 +396,76 @@ app.post('/usuarios/verificar', async (req, res) => {
             where: { telefone }
         });
 
-        res.json({ 
+        if (usuarioExistente) {
+            return res.status(400).json({
+                success: false,
+                mensagem: "Este telefone já está cadastrado!"
+            });
+        }
+
+        const senhaHash = await bcrypt.hash(senha, 10);
+        const codigoConviteUsuario = Math.random().toString(36).substring(2, 8).toUpperCase();
+
+        const novoUsuario = await prisma.user.create({
+            data: {
+                telefone,
+                senha: senhaHash,
+                codigoConvite: codigoConviteUsuario,
+                saldo: 300,
+                referenciadoPor: null
+            }
+        });
+
+        // Processar código de convite se existir
+        if (codigoConvite) {
+            const usuarioReferenciador = await prisma.user.findFirst({
+                where: { codigoConvite: codigoConvite }
+            });
+
+            if (usuarioReferenciador) {
+                await prisma.$transaction([
+                    prisma.user.update({
+                        where: { id: usuarioReferenciador.id },
+                        data: { saldo: { increment: 100 } }
+                    }),
+                    prisma.indicacao.create({
+                        data: {
+                            indicadorId: usuarioReferenciador.id,
+                            indicadoId: novoUsuario.id,
+                            codigoConvite: codigoConvite
+                        }
+                    })
+                ]);
+
+                invalidateUserCache(usuarioReferenciador.id);
+            }
+        }
+
+        const token = jwt.sign({ id: novoUsuario.id }, 'SEGREDO_SUPER_SECRETO', { expiresIn: '7d' });
+
+        res.status(201).json({
             success: true,
-            existe: !!usuarioExistente 
-        });
-    } catch (error) {
-        console.error("Erro ao verificar telefone:", error);
-        res.status(500).json({ 
-            success: false,
-            mensagem: "Erro ao verificar telefone",
-            error: error.message 
-        });
-    }
-});
-
-// Rota para obter dados da equipe (3 níveis)
-app.get('/user/team', authenticateJWT, async (req, res) => {
-    try {
-        const userId = req.user.id;
-
-        // Nível 1 - indicados diretos
-        const level1 = await prisma.indicacao.findMany({
-            where: { indicadorId: userId },
-            select: {
-                indicado: {
-                    select: {
-                        id: true,
-                        telefone: true,
-                        saldo: true,
-                        criadoEm: true
-                    }
-                }
-            }
-        });
-
-        // Nível 2 - indicados dos indicados
-        const level1Ids = level1.map(i => i.indicado.id);
-        const level2 = await prisma.indicacao.findMany({
-            where: { indicadorId: { in: level1Ids } },
-            select: {
-                indicado: {
-                    select: {
-                        id: true,
-                        telefone: true,
-                        saldo: true,
-                        criadoEm: true
-                    }
-                }
-            }
-        });
-
-        // Nível 3 - indicados dos indicados dos indicados
-        const level2Ids = level2.map(i => i.indicado.id);
-        const level3 = await prisma.indicacao.findMany({
-            where: { indicadorId: { in: level2Ids } },
-            select: {
-                indicado: {
-                    select: {
-                        id: true,
-                        telefone: true,
-                        saldo: true,
-                        criadoEm: true
-                    }
-                }
-            }
-        });
-
-        res.json({
-            success: true,
-            level1: level1.map(i => i.indicado),
-            level2: level2.map(i => i.indicado),
-            level3: level3.map(i => i.indicado)
+            mensagem: "Usuário criado com sucesso!",
+            usuario: {
+                id: novoUsuario.id,
+                telefone: novoUsuario.telefone,
+                codigoConvite: novoUsuario.codigoConvite,
+                saldo: novoUsuario.saldo
+            },
+            token
         });
 
     } catch (error) {
-        console.error("Erro ao buscar equipe:", error);
+        console.error("Erro ao criar usuário:", error);
         res.status(500).json({
             success: false,
-            mensagem: "Erro ao buscar equipe",
+            mensagem: "Erro ao criar usuário!",
             error: error.message
         });
     }
 });
 
-// Versão GET para /user/team (já existe como GET original)
-app.get('/user/team', authenticateJWT, (req, res) => {
-  res.send('GET protegida disponível para /user/team');
-});
-
-// Rota para comprar produto
+// Rota para comprar produto (com distribuição de comissões)
 app.post('/products/purchase', authenticateJWT, async (req, res) => {
     try {
         const userId = req.user.id;
@@ -488,11 +506,13 @@ app.post('/products/purchase', authenticateJWT, async (req, res) => {
             if (!user) throw new Error("Usuário não encontrado");
             if (user.saldo < product.price) throw new Error("Saldo insuficiente");
 
+            // Atualizar saldo do usuário
             await prisma.user.update({
                 where: { id: userId },
                 data: { saldo: { decrement: product.price } }
             });
 
+            // Criar investimento
             const investment = await prisma.investimento.create({
                 data: {
                     produto: product.name,
@@ -502,6 +522,7 @@ app.post('/products/purchase', authenticateJWT, async (req, res) => {
                 }
             });
 
+            // Distribuir comissões se houver referenciador
             if (user.referenciadoPor) {
                 await distributeBonuses(prisma, userId, user.referenciadoPor, product.price, investment.id);
             }
@@ -541,297 +562,99 @@ app.post('/products/purchase', authenticateJWT, async (req, res) => {
     }
 });
 
-// Versão GET para /products/purchase
-app.get('/products/purchase', authenticateJWT, (req, res) => {
-  res.send('GET protegida disponível para /products/purchase');
-});
-
 // Função para distribuir bônus para a equipe
 async function distributeBonuses(prisma, userId, referenciadorId, investmentAmount, investmentId) {
-    console.log("🧠 Distribuindo bônus para:", userId, "Referenciador:", referenciadorId);
-
-    // Obter toda a árvore de referência (3 níveis)
-    const user = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { saldo: true, referenciadoPor: true }
-    });
-
-    if (!referenciador) return;
-
-    // Nível 1 - referenciador direto (28%)
-    const bonusNivel1 = investmentAmount * 0.28;
-    await prisma.user.update({
-        where: { id: referenciador.id },
-        data: { saldo: { increment: bonusNivel1 } }
-    });
-
-    await prisma.comissao.create({
-        data: {
-            userId: referenciador.id,
-            valor: bonusNivel1,
-            nivel: "1",
-            investimentoId: investmentId,
-            valorInvestimento: investmentAmount
-        }
-    });
-
-    // Nível 2 - referenciador do referenciador (2%)
-    if (referenciador.referenciadoPor) {
-        const bonusNivel2 = investmentAmount * 0.02;
-        await prisma.user.update({
-            where: { id: referenciador.referenciadoPor },
-            data: { saldo: { increment: bonusNivel2 } }
-        });
-
-        await prisma.comissao.create({
-            data: {
-                userId: referenciador.referenciadoPor,
-                valor: bonusNivel2,
-                nivel: "2",
-                investimentoId: investmentId,
-                valorInvestimento: investmentAmount
-            }
-        });
-
-        // Nível 3 - referenciador do referenciador do referenciador (1%)
-        const nivel2User = await prisma.user.findUnique({
-            where: { id: referenciador.referenciadoPor },
-            select: { referenciadoPor: true }
-        });
-
-        if (nivel2User && nivel2User.referenciadoPor) {
-            const bonusNivel3 = investmentAmount * 0.01;
-            await prisma.user.update({
-                where: { id: nivel2User.referenciadoPor },
-                data: { saldo: { increment: bonusNivel3 } }
-            });
-
-            await prisma.comissao.create({
+    try {
+        // Nível 1 - referenciador direto (20%)
+        const bonusNivel1 = investmentAmount * 0.20;
+        await prisma.$transaction([
+            prisma.user.update({
+                where: { id: referenciadorId },
+                data: { saldo: { increment: bonusNivel1 } }
+            }),
+            prisma.comissao.create({
                 data: {
-                    userId: nivel2User.referenciadoPor,
-                    valor: bonusNivel3,
-                    nivel: "3",
+                    userId: referenciadorId,
+                    valor: bonusNivel1,
+                    nivel: "1",
                     investimentoId: investmentId,
                     valorInvestimento: investmentAmount
                 }
-            });
-        }
-    }
+            })
+        ]);
 
-    // Invalidar cache dos usuários que receberam bônus
-    invalidateUserCache(referenciador.id);
-    if (referenciador.referenciadoPor) {
-        invalidateUserCache(referenciador.referenciadoPor);
-        const nivel2User = await prisma.user.findUnique({
-            where: { id: referenciador.referenciadoPor },
+        // Nível 2 - referenciador do referenciador (8%)
+        const referenciador = await prisma.user.findUnique({
+            where: { id: referenciadorId },
             select: { referenciadoPor: true }
         });
-        if (nivel2User && nivel2User.referenciadoPor) {
-            invalidateUserCache(nivel2User.referenciadoPor);
+
+        if (referenciador && referenciador.referenciadoPor) {
+            const bonusNivel2 = investmentAmount * 0.08;
+            await prisma.$transaction([
+                prisma.user.update({
+                    where: { id: referenciador.referenciadoPor },
+                    data: { saldo: { increment: bonusNivel2 } }
+                }),
+                prisma.comissao.create({
+                    data: {
+                        userId: referenciador.referenciadoPor,
+                        valor: bonusNivel2,
+                        nivel: "2",
+                        investimentoId: investmentId,
+                        valorInvestimento: investmentAmount
+                    }
+                })
+            ]);
+
+            // Nível 3 - referenciador do referenciador do referenciador (2%)
+            const nivel2User = await prisma.user.findUnique({
+                where: { id: referenciador.referenciadoPor },
+                select: { referenciadoPor: true }
+            });
+
+            if (nivel2User && nivel2User.referenciadoPor) {
+                const bonusNivel3 = investmentAmount * 0.02;
+                await prisma.$transaction([
+                    prisma.user.update({
+                        where: { id: nivel2User.referenciadoPor },
+                        data: { saldo: { increment: bonusNivel3 } }
+                    }),
+                    prisma.comissao.create({
+                        data: {
+                            userId: nivel2User.referenciadoPor,
+                            valor: bonusNivel3,
+                            nivel: "3",
+                            investimentoId: investmentId,
+                            valorInvestimento: investmentAmount
+                        }
+                    })
+                ]);
+
+                invalidateUserCache(nivel2User.referenciadoPor);
+            }
+
+            invalidateUserCache(referenciador.referenciadoPor);
         }
+
+        invalidateUserCache(referenciadorId);
+
+    } catch (error) {
+        console.error("Erro ao distribuir bônus:", error);
+        throw error;
     }
 }
 
-// Rota para obter produtos
-app.get('/products', async (req, res) => {
-    try {
-        const products = [
-            { id: '1', name: "Projeto 1", price: 5000, day_income: 600, days: 50, total_income: 30000 },
-            { id: '2', name: "Projeto 2", price: 10000, day_income: 1200, days: 50, total_income: 60000 },
-            { id: '3', name: "Projeto 3", price: 30000, day_income: 3600, days: 50, total_income: 180000 },
-            { id: '4', name: "Projeto 4", price: 50000, day_income: 6000, days: 50, total_income: 300000 },
-            { id: '5', name: "Projeto 5", price: 100000, day_income: 12000, days: 50, total_income: 600000 },
-            { id: '6', name: "Projeto 6", price: 150000, day_income: 18000, days: 50, total_income: 900000 },
-            { id: '7', name: "Projeto 7", price: 300000, day_income: 36000, days: 50, total_income: 1800000 },
-            { id: '8', name: "Projeto 8", price: 600000, day_income: 72000, days: 50, total_income: 3600000 }
-        ];
-
-        res.json({
-            success: true,
-            products
-        });
-    } catch (error) {
-        console.error("Erro ao buscar produtos:", error);
-        res.status(500).json({
-            success: false,
-            mensagem: "Erro ao buscar produtos",
-            error: error.message
-        });
-    }
+// Middleware de erro global
+app.use((err, req, res, next) => {
+    console.error(err.stack);
+    res.status(500).json({ 
+        success: false,
+        mensagem: 'Erro interno no servidor' 
+    });
 });
 
-app.post("/game/bet", authenticateJWT, async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const { amount, gameType, result } = req.body;
-
-        // Validações básicas
-        if (!amount || !gameType || !result) {
-            return res.status(400).json({
-                success: false,
-                mensagem: "Dados da aposta incompletos!"
-            });
-        }
-
-        // Busca o saldo do usuário
-        const user = await prisma.User.findUnique({
-            where: { id: userId },
-            select: { saldo: true }
-        });
-
-        if (!user) {
-            return res.status(404).json({ success: false, mensagem: "Usuário não encontrado" });
-        }
-
-        let newBalance = user.saldo - amount; // Deduz o valor da aposta
-
-        // Se houver vitória, adiciona o valor ganho
-        if (result.winAmount && result.winAmount > 0) {
-            newBalance += result.winAmount;
-        }
-
-        await prisma.User.update({
-            where: { id: userId },
-            data: { saldo: newBalance }
-        });
-
-        // Registrar a aposta no banco de dados
-        prisma.gameBet.create({
-
-
-            data: {
-                userId: userId,
-                amount: amount,
-                gameType: gameType,
-                winAmount: result.winAmount || 0,
-                reels: JSON.stringify(result.reels), // Salva o resultado dos rolos
-                symbols: JSON.stringify(result.symbols) // Salva os símbolos
-            }
-        });
-
-        // Invalida o cache do usuário para que o saldo seja atualizado
-        invalidateUserCache(userId);
-
-        res.json({
-            success: true,
-            mensagem: "Aposta processada com sucesso!",
-            newBalance: newBalance
-        });
-
-    } catch (error) {
-        console.error("Erro ao processar aposta:", error);
-        res.status(500).json({
-            success: false,
-            mensagem: "Erro interno ao processar aposta",
-            error: error.message
-        });
-    }
-});
-
-
-
-// Rota de registro
-app.post('/usuarios', async (req, res) => {
-    try {
-        const { telefone, senha, codigoConvite } = req.body;
-        
-        // Validações básicas
-        if (!telefone || !senha) {
-            return res.status(400).json({
-                success: false,
-                mensagem: "Telefone e senha são obrigatórios!"
-            });
-        }
-
-        if (!telefone.match(/^\+244\d{9}$/)) {
-            return res.status(400).json({
-                success: false,
-                mensagem: "Formato de telefone inválido. Deve ser +244 seguido de 9 dígitos"
-            });
-        }
-
-        if (senha.length < 6) {
-            return res.status(400).json({
-                success: false,
-                mensagem: "A senha deve ter pelo menos 6 caracteres"
-            });
-        }
-
-        // Verificar se usuário já existe
-        const usuarioExistente = await prisma.user.findUnique({
-            where: { telefone }
-        });
-
-        if (usuarioExistente) {
-            return res.status(400).json({
-                success: false,
-                mensagem: "Este telefone já está cadastrado!"
-            });
-        }
-
-        // Criar novo usuário
-        const senhaHash = await bcrypt.hash(senha, 10);
-        const codigoConviteUsuario = Math.random().toString(36).substring(2, 8).toUpperCase();
-
-        const novoUsuario = await prisma.user.create({
-            data: {
-                telefone,
-                senha: senhaHash,
-                codigoConvite: codigoConviteUsuario,
-                saldo: 300,
-                referenciadoPor: null
-            }
-        });
-
-        // Se houver código de convite
-        if (codigoConvite) {
-            const usuarioReferenciador = await prisma.user.findFirst({
-                where: { codigoConvite: codigoConvite }
-            });
-
-            if (usuarioReferenciador) {
-                await prisma.user.update({
-                    where: { id: usuarioReferenciador.id },
-                    data: { saldo: { increment: 0 } }
-                });
-
-                await prisma.indicacao.create({
-                    data: {
-                        indicadorId: usuarioReferenciador.id,
-                        indicadoId: novoUsuario.id,
-                        codigoConvite: codigoConvite
-                    }
-                });
-            }
-        }
-
-        // Gerar token JWT
-        const token = jwt.sign({ id: novoUsuario.id }, 'SEGREDO_SUPER_SECRETO', { expiresIn: '7d' });
-
-        res.status(201).json({
-            success: true,
-            mensagem: "Usuário criado com sucesso!",
-            usuario: {
-                id: novoUsuario.id,
-                telefone: novoUsuario.telefone,
-                codigoConvite: novoUsuario.codigoConvite,
-                saldo: novoUsuario.saldo
-            },
-            token
-        });
-
-    } catch (error) {
-        console.error("Erro ao criar usuário:", error);
-        res.status(500).json({
-            success: false,
-            mensagem: "Erro ao criar usuário!",
-            error: error.message
-        });
-    }
-});
-
-// Versão GET para /usuarios (não adicionada pois é uma rota pública de POST)
-
+// Iniciar servidor
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
 });
