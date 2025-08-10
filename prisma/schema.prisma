@@ -13,7 +13,7 @@ model User {
   senha             String
   codigoConvite     String        @unique
   criadoEm          DateTime      @default(now())
-  saldo             Float         @default(400.00)
+  saldo             Float         @default(300.00)
   
 
   referenciadoPor   String?       @db.ObjectId

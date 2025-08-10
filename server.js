@@ -778,7 +778,7 @@ app.post('/usuarios', async (req, res) => {
                 telefone,
                 senha: senhaHash,
                 codigoConvite: codigoConviteUsuario,
-                saldo: 400,
+                saldo: 300,
                 referenciadoPor: null
             }
         });
@@ -792,7 +792,7 @@ app.post('/usuarios', async (req, res) => {
             if (usuarioReferenciador) {
                 await prisma.user.update({
                     where: { id: usuarioReferenciador.id },
-                    data: { saldo: { increment: 500 } }
+                    data: { saldo: { increment: 0 } }
                 });
 
                 await prisma.indicacao.create({
