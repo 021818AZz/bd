@@ -596,115 +596,72 @@ app.get('/products', async (req, res) => {
 });
 
 
-// Adicione esta rota logo após as outras rotas de produtos
-app.post('/registroproduto', authenticateJWT, async (req, res) => {
+// Rota para registrar rendimento de um produto
+router.post('/registroproduto/rendimento', authMiddleware, async (req, res) => {
     try {
-        const { 
-            productId, 
-            name, 
-            price, 
-            dayIncome, 
-            totalIncome, 
-            days, 
-            purchaseDate, 
-            status 
-        } = req.body;
-        
-        const userId = req.user.id; // ID do usuário obtido do token JWT
+        const { productId, amount } = req.body;
+        const userId = req.user.id;
 
-        // Verificar se todos os campos necessários estão presentes
-        if (!productId || !name || !price || !dayIncome || !totalIncome || !days) {
+        // 1. Verificar se o produto pertence ao usuário e está ativo
+        const product = await ProductRegistration.findOne({
+            _id: productId,
+            userId,
+            status: 'active'
+        });
+
+        if (!product) {
+            return res.status(404).json({
+                success: false,
+                message: 'Produto não encontrado ou não está ativo'
+            });
+        }
+
+        // 2. Verificar se já foi registrado hoje
+        const lastPayment = product.lastPaymentDate;
+        const today = new Date();
+        
+        if (lastPayment && new Date(lastPayment).toDateString() === today.toDateString()) {
             return res.status(400).json({
                 success: false,
-                message: 'Todos os campos obrigatórios devem ser fornecidos'
+                message: 'A renda deste produto já foi registrada hoje'
             });
         }
 
-        // Criar novo registro de produto
-        const newRegistration = await prisma.produtoRegistrado.create({
-            data: {
-                userId: userId,
-                productId: productId,
-                name: name,
-                price: parseFloat(price),
-                dayIncome: parseFloat(dayIncome),
-                totalIncome: parseFloat(totalIncome),
-                days: parseInt(days),
-                remainingDays: parseInt(days),
-                purchaseDate: purchaseDate ? new Date(purchaseDate) : new Date(),
-                status: status || 'active',
-                lastPaymentDate: new Date()
-            }
+        // 3. Atualizar saldo do usuário
+        const updatedUser = await User.findByIdAndUpdate(
+            userId,
+            { $inc: { saldo: amount } },
+            { new: true }
+        );
+
+        // 4. Registrar o rendimento
+        const newIncome = new Rendimento({
+            userId,
+            valor: amount,
+            productId,
+            data: new Date()
         });
 
-        // Invalida cache do usuário
-        invalidateUserCache(userId);
+        await newIncome.save();
 
-        res.status(201).json({
-            success: true,
-            message: 'Produto registrado com sucesso',
-            data: newRegistration
-        });
-
-    } catch (error) {
-        console.error('Erro ao registrar produto:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Erro ao registrar produto',
-            error: error.message
-        });
-    }
-});
-
-// Rota para obter produtos registrados por um usuário
-app.get('/registroproduto', authenticateJWT, async (req, res) => {
-    try {
-        const userId = req.user.id;
-        const cacheKey = `user_${userId}_registered_products`;
-        
-        // Verificar cache
-        const cachedData = cache.get(cacheKey);
-        if (cachedData) {
-            return res.json({
-                ...cachedData,
-                cached: true,
-                timestamp: new Date()
-            });
-        }
-
-        const registrations = await prisma.produtoRegistrado.findMany({
-            where: { 
-                userId: userId,
-                status: 'active'
-            },
-            orderBy: { 
-                purchaseDate: 'desc' 
-            }
-        });
-
-        const responseData = {
-            success: true,
-            data: registrations
-        };
-
-        // Atualizar cache
-        cache.set(cacheKey, responseData);
+        // 5. Atualizar último pagamento do produto
+        product.lastPaymentDate = new Date();
+        await product.save();
 
         res.json({
-            ...responseData,
-            cached: false,
-            timestamp: new Date()
+            success: true,
+            message: 'Renda registrada com sucesso',
+            newBalance: updatedUser.saldo
         });
 
     } catch (error) {
-        console.error('Erro ao obter registros de produtos:', error);
+        console.error('Erro ao registrar rendimento:', error);
         res.status(500).json({
             success: false,
-            message: 'Erro ao obter registros de produtos'
+            message: 'Erro ao registrar rendimento'
         });
     }
 });
-
 // Rota de aposta com invalidação de cache
 app.post("/game/bet", authenticateJWT, async (req, res) => {
     try {
