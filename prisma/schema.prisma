@@ -15,7 +15,6 @@ model User {
   criadoEm          DateTime      @default(now())
   saldo             Float         @default(300.00)
   
-
   referenciadoPor   String?       @db.ObjectId
   referenciado      User?         @relation("MinhaIndicacao", fields: [referenciadoPor], references: [id], onDelete: NoAction, onUpdate: NoAction)
   minhasIndicacoes  User[]        @relation("MinhaIndicacao")
@@ -30,7 +29,7 @@ model User {
   withdrawals       Withdrawal[]
   comissoes         Comissao[]
   gameBets          GameBet[]
-
+  produtosRegistrados ProdutoRegistrado[]
 }
 
 model Indicacao {
@@ -142,4 +141,26 @@ model GameBet {
   createdAt  DateTime @default(now())
 
   @@index([userId])
+}
+
+model ProdutoRegistrado {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId         String   @db.ObjectId
+  user           User     @relation(fields: [userId], references: [id])
+  productId      String
+  name           String
+  price          Float
+  dayIncome      Float
+  totalIncome    Float
+  days           Int
+  remainingDays  Int
+  purchaseDate   DateTime @default(now())
+  lastPaymentDate DateTime
+  status         String   @default("active") // active, expired, cancelled
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([purchaseDate])
 }
