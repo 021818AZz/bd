@@ -7,160 +7,110 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id                String        @id @default(auto()) @map("_id") @db.ObjectId
-  telefone          String        @unique
-  senha             String
-  codigoConvite     String        @unique
-  criadoEm          DateTime      @default(now())
-  saldo             Float         @default(300.00)
-  
-  referenciadoPor   String?       @db.ObjectId
-  referenciado      User?         @relation("MinhaIndicacao", fields: [referenciadoPor], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  minhasIndicacoes  User[]        @relation("MinhaIndicacao")
+model Usuario {
+  id             String         @id @default(auto()) @map("_id") @db.ObjectId
+  mobile         String         @unique
+  password       String
+  codigoConvite  String         @unique
+  convidadoPorId String?
+  saldo          Float          @default(0)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
 
-  indicacoesFeitas  Indicacao[]   @relation("IndicacoesFeitas")
-  indicacaoRecebida Indicacao?    @relation("IndicacaoRecebida")
+depositos      Deposito[]
+  convites       Usuario[]      @relation("Convites")
+  convidadoPor   Usuario?       @relation("Convites", fields: [convidadoPorId], references: [codigoConvite], onDelete: NoAction, onUpdate: NoAction)
 
-  investimentos     Investimento[]
-  rendimentos       Rendimento[]
-  bankAccounts      BankAccount[]
-  deposits          Deposit[]
-  withdrawals       Withdrawal[]
-  comissoes         Comissao[]
-  gameBets          GameBet[]
-  produtosRegistrados ProdutoRegistrado[]
-}
+  investimentos  Investimento[]
+  historicos     Historico[]
+  contaBancaria  ContaBancaria?  // 1:1 opcional
+  retiradas      Retirada[]      // relação 1:N com Retirada
+  codigoTesouros CodigoTesouro[] // lado inverso da relação
 
-model Indicacao {
-  id              String   @id @default(auto()) @map("_id") @db.ObjectId
-  codigoConvite   String
-  dataIndicacao   DateTime @default(now())
-
-  indicador       User     @relation("IndicacoesFeitas", fields: [indicadorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  indicadorId     String   @db.ObjectId
-
-  indicado        User     @relation("IndicacaoRecebida", fields: [indicadoId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  indicadoId      String   @db.ObjectId
-
-  @@unique([indicadoId])
+  @@index([convidadoPorId])
+  @@index([saldo])
 }
 
 model Investimento {
-  id              String   @id @default(auto()) @map("_id") @db.ObjectId
-  produto         String
-  valor           Float
-  data            DateTime @default(now())
+  id              String   @id @default(uuid()) @map("_id")
+  nome            String
+  preco           Float
+  rendaDiaria     Float
+  validadeDias    Int
+  dataCompra      DateTime @default(now())
+  dataExpiracao   DateTime?
   ultimoPagamento DateTime?
-  user            User     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  userId          String   @db.ObjectId
 
-  comissoes       Comissao[]
+  usuarioId       String   @db.ObjectId
+  usuario         Usuario  @relation(fields: [usuarioId], references: [id])
 }
 
-model Rendimento {
-  id     String   @id @default(auto()) @map("_id") @db.ObjectId
-  valor  Float
-  data   DateTime @default(now())
-  user   User     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  userId String   @db.ObjectId
-}
 
-model BankAccount {
-  id             String      @id @default(auto()) @map("_id") @db.ObjectId
-  bank           String
-  account_number String
-  account_holder String
-  created_at     DateTime    @default(now())
-  updated_at     DateTime    @updatedAt
-  user           User        @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  userId         String      @db.ObjectId
-  withdrawals    Withdrawal[]
-}
 
-model Withdrawal {
-  id              String      @id @default(auto()) @map("_id") @db.ObjectId
-  amount          Float
-  fee             Float
-  net_amount      Float
-  status          String      @default("pending")
-  bank_account    BankAccount @relation(fields: [bank_account_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  bank_account_id String      @db.ObjectId
-  user            User        @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  user_id         String      @db.ObjectId
-  created_at      DateTime    @default(now())
-  updated_at      DateTime    @updatedAt
-}
 
-model Deposit {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  amount      Float
-  bank        String
-  comprovante String   // Armazena a imagem em base64 ou URL (sugestão: usar URL)
-  fileName    String
-  fileType    String
-  status      String   @default("pending") // pending, approved, rejected
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  userId      String   @db.ObjectId
-  user        User     @relation(fields: [userId], references: [id])
-
-  @@index([userId])
-  @@map("deposits")
-}
-
-model Comissao {
-  id                String   @id @default(auto()) @map("_id") @db.ObjectId
-  userId            String   @db.ObjectId
-  user              User     @relation(fields: [userId], references: [id])
-
-  valor             Float
-  nivel             String   // A, B ou C
-
-  investimentoId    String   @db.ObjectId
-  investimento      Investimento @relation(fields: [investimentoId], references: [id])
-
-  valorInvestimento Float
-  createdAt         DateTime @default(now())
-
-  @@index([userId])
-  @@index([investimentoId])
-}
-
-model GameBet {
+model Historico {
   id         String   @id @default(auto()) @map("_id") @db.ObjectId
-  userId     String   @db.ObjectId
-  user       User     @relation(fields: [userId], references: [id])
-
-  amount     Float
-  gameType   String
-  winAmount  Float
-  reels      String   // Armazena JSON.stringify(result.reels)
-  symbols    String   // Armazena JSON.stringify(result.symbols)
-
-  createdAt  DateTime @default(now())
-
-  @@index([userId])
+  valor      Float
+  descricao  String
+  tipo       String?  // DEPOSITO, SAQUE, INVESTIMENTO, BONUS
+  data       DateTime @default(now())
+  usuarioId  String   @db.ObjectId
+  usuario    Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
 }
 
-model ProdutoRegistrado {
-  id             String   @id @default(auto()) @map("_id") @db.ObjectId
-  userId         String   @db.ObjectId
-  user           User     @relation(fields: [userId], references: [id])
-  productId      String
-  name           String
-  price          Float
-  dayIncome      Float
-  totalIncome    Float
-  days           Int
-  remainingDays  Int
-  purchaseDate   DateTime @default(now())
-  lastPaymentDate DateTime
-  status         String   @default("active") // active, expired, cancelled
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+model ContaBancaria {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  usuario      Usuario  @relation(fields: [usuarioId], references: [id])
+  usuarioId    String   @unique @db.ObjectId
+  nomeTitular  String
+  banco        String   // BFA, BAI, BIC, ATL
+  numeroConta  String
+  criadoEm     DateTime @default(now())
+  atualizadoEm DateTime @updatedAt
+}
 
-  @@index([userId])
-  @@index([status])
-  @@index([purchaseDate])
+model Retirada {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  usuarioId    String   @db.ObjectId
+  usuario      Usuario  @relation(fields: [usuarioId], references: [id])
+  valorBruto   Float
+  valorLiquido Float
+  taxa         Float
+  status       String   @default("PENDENTE") // PENDENTE, PROCESSANDO, CONCLUIDO, RECUSADO
+  banco        String
+  conta        String
+  nomeTitular  String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model CodigoTesouro {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  codigo    String   @unique
+  usuarioId String   @db.ObjectId
+  usuario   Usuario  @relation(fields: [usuarioId], references: [id])
+  valor     Int
+  data      DateTime @default(now())
+}
+model ContaAdmin {
+  id           String    @id @default(auto()) @map("_id") @db.ObjectId
+  nomeTitular  String
+  banco        String    // BFA, BAI, BIC, ATL
+  iban         String
+  createdAt    DateTime  @default(now())
+  atualizadoEm DateTime  @updatedAt
+  depositos    Deposito[]
+}
+
+model Deposito {
+  id              String      @id @default(auto()) @map("_id") @db.ObjectId
+  usuarioId       String      @db.ObjectId
+  usuario         Usuario     @relation(fields: [usuarioId], references: [id])
+  valorSolicitado Float
+  valorExato      Float       // Valor com centavos exatos para transferência
+  banco           String      // BFA, BAI, BIC, ATL
+  contaAdminId    String      @db.ObjectId
+  contaAdmin      ContaAdmin  @relation(fields: [contaAdminId], references: [id])
+  status          String      @default("PENDENTE") // PENDENTE, CONFIRMADO, CANCELADO
+  data            DateTime    @default(now())
 }
