@@ -7,110 +7,15 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Usuario {
-  id             String         @id @default(auto()) @map("_id") @db.ObjectId
-  mobile         String         @unique
-  password       String
-  codigoConvite  String         @unique
-  convidadoPorId String?
-  saldo          Float          @default(0)
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+model User {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  mobile          String   @unique
+  password        String
+  pay_password    String
+  invitation_code String   @unique
+  inviter_id      String?  @db.ObjectId
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
 
-depositos      Deposito[]
-  convites       Usuario[]      @relation("Convites")
-  convidadoPor   Usuario?       @relation("Convites", fields: [convidadoPorId], references: [codigoConvite], onDelete: NoAction, onUpdate: NoAction)
-
-  investimentos  Investimento[]
-  historicos     Historico[]
-  contaBancaria  ContaBancaria?  // 1:1 opcional
-  retiradas      Retirada[]      // relação 1:N com Retirada
-  codigoTesouros CodigoTesouro[] // lado inverso da relação
-
-  @@index([convidadoPorId])
-  @@index([saldo])
-}
-
-model Investimento {
-  id              String   @id @default(uuid()) @map("_id")
-  nome            String
-  preco           Float
-  rendaDiaria     Float
-  validadeDias    Int
-  dataCompra      DateTime @default(now())
-  dataExpiracao   DateTime?
-  ultimoPagamento DateTime?
-
-  usuarioId       String   @db.ObjectId
-  usuario         Usuario  @relation(fields: [usuarioId], references: [id])
-}
-
-
-
-
-model Historico {
-  id         String   @id @default(auto()) @map("_id") @db.ObjectId
-  valor      Float
-  descricao  String
-  tipo       String?  // DEPOSITO, SAQUE, INVESTIMENTO, BONUS
-  data       DateTime @default(now())
-  usuarioId  String   @db.ObjectId
-  usuario    Usuario  @relation(fields: [usuarioId], references: [id], onDelete: Cascade)
-}
-
-model ContaBancaria {
-  id           String   @id @default(auto()) @map("_id") @db.ObjectId
-  usuario      Usuario  @relation(fields: [usuarioId], references: [id])
-  usuarioId    String   @unique @db.ObjectId
-  nomeTitular  String
-  banco        String   // BFA, BAI, BIC, ATL
-  numeroConta  String
-  criadoEm     DateTime @default(now())
-  atualizadoEm DateTime @updatedAt
-}
-
-model Retirada {
-  id           String   @id @default(auto()) @map("_id") @db.ObjectId
-  usuarioId    String   @db.ObjectId
-  usuario      Usuario  @relation(fields: [usuarioId], references: [id])
-  valorBruto   Float
-  valorLiquido Float
-  taxa         Float
-  status       String   @default("PENDENTE") // PENDENTE, PROCESSANDO, CONCLUIDO, RECUSADO
-  banco        String
-  conta        String
-  nomeTitular  String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-}
-
-model CodigoTesouro {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  codigo    String   @unique
-  usuarioId String   @db.ObjectId
-  usuario   Usuario  @relation(fields: [usuarioId], references: [id])
-  valor     Int
-  data      DateTime @default(now())
-}
-model ContaAdmin {
-  id           String    @id @default(auto()) @map("_id") @db.ObjectId
-  nomeTitular  String
-  banco        String    // BFA, BAI, BIC, ATL
-  iban         String
-  createdAt    DateTime  @default(now())
-  atualizadoEm DateTime  @updatedAt
-  depositos    Deposito[]
-}
-
-model Deposito {
-  id              String      @id @default(auto()) @map("_id") @db.ObjectId
-  usuarioId       String      @db.ObjectId
-  usuario         Usuario     @relation(fields: [usuarioId], references: [id])
-  valorSolicitado Float
-  valorExato      Float       // Valor com centavos exatos para transferência
-  banco           String      // BFA, BAI, BIC, ATL
-  contaAdminId    String      @db.ObjectId
-  contaAdmin      ContaAdmin  @relation(fields: [contaAdminId], references: [id])
-  status          String      @default("PENDENTE") // PENDENTE, CONFIRMADO, CANCELADO
-  data            DateTime    @default(now())
+  @@map("users")
 }
