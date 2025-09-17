@@ -8,14 +8,31 @@ datasource db {
 }
 
 model User {
-  id              String   @id @default(auto()) @map("_id") @db.ObjectId
-  mobile          String   @unique
+  id              String          @id @default(auto()) @map("_id") @db.ObjectId
+  mobile          String          @unique
   password        String
   pay_password    String
-  invitation_code String   @unique
-  inviter_id      String?  @db.ObjectId
-  created_at      DateTime @default(now())
-  updated_at      DateTime @updatedAt
+  invitation_code String          @unique
+  inviter_id      String?         @db.ObjectId
+  inviter         User?           @relation("UserReferrals", fields: [inviter_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  referrals       User[]          @relation("UserReferrals")
 
-  @@map("users")
+  referralLevels  ReferralLevel[] @relation("ReferralUser")
+  referredAs      ReferralLevel[] @relation("ReferralReferrer")
+
+  created_at      DateTime        @default(now())
+  updated_at      DateTime        @updatedAt
+}
+
+model ReferralLevel {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  user_id     String   @db.ObjectId
+  referrer_id String   @db.ObjectId
+  level       Int
+  created_at  DateTime @default(now())
+
+  user        User     @relation("ReferralUser", fields: [user_id], references: [id])
+  referrer    User     @relation("ReferralReferrer", fields: [referrer_id], references: [id])
+
+  @@unique([user_id, referrer_id, level])
 }
