@@ -207,9 +207,158 @@ app.post('/login', async (req, res) => {
 });
 
 // Rota de registro (pública)
+// Rota de registro (pública)
 app.post('/register', async (req, res) => {
-    // ... (código anterior mantido igual)
+    try {
+        const { mobile, password, pay_password, invitation_code, saldo } = req.body;
+        
+        // Validações básicas
+        if (!mobile || !password || !pay_password) {
+            return res.status(400).json({
+                success: false,
+                message: 'Telefone, senha e senha de pagamento são obrigatórios'
+            });
+        }
+
+        // Verificar se usuário já existe
+        const existingUser = await prisma.user.findUnique({
+            where: { mobile }
+        });
+
+        if (existingUser) {
+            return res.status(409).json({
+                success: false,
+                message: 'Número de telefone já cadastrado'
+            });
+        }
+
+        // Verificar código de convite se fornecido
+        let inviterId = null;
+        if (invitation_code) {
+            const inviter = await prisma.user.findUnique({
+                where: { invitation_code: invitation_code.toUpperCase() }
+            });
+            
+            if (!inviter) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Código de convite inválido'
+                });
+            }
+            inviterId = inviter.id;
+        }
+
+        // Gerar código de convite único
+        let invitationCode;
+        let isUnique = false;
+        
+        while (!isUnique) {
+            invitationCode = generateInvitationCode();
+            const existingCode = await prisma.user.findUnique({
+                where: { invitation_code: invitationCode }
+            });
+            if (!existingCode) isUnique = true;
+        }
+
+        // Criptografar senhas
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const hashedPayPassword = await bcrypt.hash(pay_password, 10);
+
+        // Criar usuário
+        const newUser = await prisma.user.create({
+            data: {
+                mobile,
+                password: hashedPassword,
+                pay_password: hashedPayPassword,
+                invitation_code: invitationCode,
+                saldo: saldo || 570,
+                inviter_id: inviterId,
+                created_at: new Date(),
+                updated_at: new Date()
+            }
+        });
+
+        // Se houver um inviter, criar registros na rede de referência
+        if (inviterId) {
+            await createReferralNetwork(inviterId, newUser.id);
+        }
+
+        res.status(201).json({
+            success: true,
+            message: 'Usuário cadastrado com sucesso',
+            data: {
+                user_id: newUser.id,
+                mobile: newUser.mobile,
+                invitation_code: newUser.invitation_code
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro no registro:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
 });
+
+// Função auxiliar para gerar código de convite
+function generateInvitationCode() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let result = '';
+    for (let i = 0; i < 6; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+}
+
+// Função auxiliar para criar rede de referência
+async function createReferralNetwork(inviterId, newUserId) {
+    try {
+        // Nível 1: convidador direto
+        await prisma.referralLevel.create({
+            data: {
+                referrer_id: inviterId,
+                user_id: newUserId,
+                level: 1
+            }
+        });
+
+        // Buscar o convidador do convidador (nível 2)
+        const level2Inviter = await prisma.user.findUnique({
+            where: { id: inviterId },
+            select: { inviter_id: true }
+        });
+
+        if (level2Inviter && level2Inviter.inviter_id) {
+            await prisma.referralLevel.create({
+                data: {
+                    referrer_id: level2Inviter.inviter_id,
+                    user_id: newUserId,
+                    level: 2
+                }
+            });
+
+            // Buscar o convidador do nível 2 (nível 3)
+            const level3Inviter = await prisma.user.findUnique({
+                where: { id: level2Inviter.inviter_id },
+                select: { inviter_id: true }
+            });
+
+            if (level3Inviter && level3Inviter.inviter_id) {
+                await prisma.referralLevel.create({
+                    data: {
+                        referrer_id: level3Inviter.inviter_id,
+                        user_id: newUserId,
+                        level: 3
+                    }
+                });
+            }
+        }
+    } catch (error) {
+        console.error('Erro ao criar rede de referência:', error);
+    }
+}
 
 // Rota para verificar código de convite (pública)
 app.get('/invitation/:code/verify', async (req, res) => {
