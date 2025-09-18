@@ -6,7 +6,8 @@ const { PrismaClient } = require('@prisma/client');
 
 const prisma = new PrismaClient();
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
+
 const JWT_SECRET = process.env.JWT_SECRET || 'seu_segredo_jwt_super_seguro_aqui';
 
 // Middleware otimizado
