@@ -415,6 +415,9 @@ app.get('/user/:id/full-profile', authenticateToken, authorizeUser, async (req, 
             select: {
                 id: true,
                 mobile: true,
+                 nickname: true,     // Adicione esta linha
+                sex: true,          // Adicione esta linha
+                head_img: true,     // Adicione esta linhac
                 saldo: true,
                 invitation_code: true,
                 created_at: true,
@@ -678,6 +681,203 @@ app.delete('/user/:id', authenticateToken, authorizeUser, async (req, res) => {
     }
 });
 
+// Adicione estas rotas ao seu arquivo server.js
+
+// Rota para atualizar informações do usuário (apelido, sexo, avatar)
+app.put('/user/profile/update', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { nickname, sex, head_img } = req.body;
+        
+        const updateData = { updated_at: new Date() };
+        
+        if (nickname) updateData.nickname = nickname;
+        if (sex) updateData.sex = sex;
+        if (head_img) updateData.head_img = head_img;
+
+        const updatedUser = await prisma.user.update({
+            where: { id: userId },
+            data: updateData,
+            select: {
+                id: true,
+                mobile: true,
+                nickname: true,
+                sex: true,
+                head_img: true,
+                saldo: true,
+                invitation_code: true,
+                updated_at: true
+            }
+        });
+
+        res.json({
+            success: true,
+            message: 'Informações atualizadas com sucesso',
+            data: updatedUser
+        });
+
+    } catch (error) {
+        console.error('Erro ao atualizar informações do usuário:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para alterar senha
+app.put('/user/password/update', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { current_password, new_password } = req.body;
+        
+        if (!current_password || !new_password) {
+            return res.status(400).json({
+                success: false,
+                message: 'Senha atual e nova senha são obrigatórias'
+            });
+        }
+
+        // Buscar usuário para verificar a senha atual
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { password: true }
+        });
+
+        if (!user || !(await bcrypt.compare(current_password, user.password))) {
+            return res.status(401).json({
+                success: false,
+                message: 'Senha atual incorreta'
+            });
+        }
+
+        // Atualizar senha
+        const hashedPassword = await bcrypt.hash(new_password, 10);
+        
+        await prisma.user.update({
+            where: { id: userId },
+            data: {
+                password: hashedPassword,
+                updated_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: 'Senha alterada com sucesso'
+        });
+
+    } catch (error) {
+        console.error('Erro ao alterar senha:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para alterar senha de pagamento
+app.put('/user/pay-password/update', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { current_pay_password, new_pay_password } = req.body;
+        
+        if (!current_pay_password || !new_pay_password) {
+            return res.status(400).json({
+                success: false,
+                message: 'Senha de pagamento atual e nova senha são obrigatórias'
+            });
+        }
+
+        // Buscar usuário para verificar a senha de pagamento atual
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            select: { pay_password: true }
+        });
+
+        if (!user || !(await bcrypt.compare(current_pay_password, user.pay_password))) {
+            return res.status(401).json({
+                success: false,
+                message: 'Senha de pagamento atual incorreta'
+            });
+        }
+
+        // Atualizar senha de pagamento
+        const hashedPayPassword = await bcrypt.hash(new_pay_password, 10);
+        
+        await prisma.user.update({
+            where: { id: userId },
+            data: {
+                pay_password: hashedPayPassword,
+                updated_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: 'Senha de pagamento alterada com sucesso'
+        });
+
+    } catch (error) {
+        console.error('Erro ao alterar senha de pagamento:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para obter informações da conta bancária
+app.get('/user/bank-account', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        
+        const bankAccount = await prisma.bankAccount.findUnique({
+            where: { user_id: userId },
+            select: {
+                id: true,
+                bank_name: true,
+                account_holder: true,
+                account_number: true,
+                branch_code: true,
+                created_at: true,
+                updated_at: true
+            }
+        });
+
+        res.json({
+            success: true,
+            data: bankAccount || null
+        });
+
+    } catch (error) {
+        console.error('Erro ao buscar informações da conta bancária:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para fazer logout (invalida o token)
+app.post('/logout', authenticateToken, async (req, res) => {
+    try {
+        // Em uma implementação mais robusta, você poderia adicionar o token a uma blacklist
+        // Por enquanto, apenas retornamos sucesso e o cliente remove o token do localStorage
+        
+        res.json({
+            success: true,
+            message: 'Logout realizado com sucesso'
+        });
+
+    } catch (error) {
+        console.error('Erro no logout:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
 // Iniciar servidor
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Servidor rodando na porta ${PORT}`);

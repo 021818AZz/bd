@@ -8,21 +8,43 @@ datasource db {
 }
 
 model User {
-  id              String          @id @default(auto()) @map("_id") @db.ObjectId
-  mobile          String          @unique
-  password        String
-  pay_password    String
-  saldo           Float           @default(570.0) // Adicionei este campo
-  invitation_code String          @unique
-  inviter_id      String?         @db.ObjectId
-  inviter         User?           @relation("UserReferrals", fields: [inviter_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  referrals       User[]          @relation("UserReferrals")
+  id               String   @id @default(auto()) @map("_id") @db.ObjectId
+  mobile           String   @unique
+  password         String
+  pay_password     String
+  nickname         String?
+  sex              Int?     // 1 = Masculino, 2 = Feminino
+  head_img         String?
+  saldo            Float    @default(570)
+  invitation_code  String   @unique
+  inviter_id       String?  @db.ObjectId
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
 
+  // Relações
+  inviter         User?           @relation("UserInviter", fields: [inviter_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  referrals       User[]          @relation("UserInviter")
   referralLevels  ReferralLevel[] @relation("ReferralUser")
   referredAs      ReferralLevel[] @relation("ReferralReferrer")
+  bankAccount     BankAccount?
 
-  created_at      DateTime        @default(now())
-  updated_at      DateTime        @updatedAt
+  @@map("users")
+}
+
+model BankAccount {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  user_id        String   @unique @db.ObjectId
+  bank_name      String
+  account_holder String
+  account_number String
+  branch_code    String?
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  // Relações
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("bank_accounts")
 }
 
 model ReferralLevel {
@@ -36,4 +58,5 @@ model ReferralLevel {
   referrer    User     @relation("ReferralReferrer", fields: [referrer_id], references: [id])
 
   @@unique([user_id, referrer_id, level])
+  @@map("referral_levels")
 }
