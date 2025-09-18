@@ -12,6 +12,7 @@ model User {
   mobile          String          @unique
   password        String
   pay_password    String
+  saldo           Float           @default(570.0) // Adicionei este campo
   invitation_code String          @unique
   inviter_id      String?         @db.ObjectId
   inviter         User?           @relation("UserReferrals", fields: [inviter_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
