@@ -878,6 +878,177 @@ app.post('/logout', authenticateToken, async (req, res) => {
         });
     }
 });
+
+// Rota para fazer check-in
+app.post('/api/checkin', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        // Verificar se já fez check-in hoje
+        const existingCheckin = await prisma.dailyCheckin.findFirst({
+            where: {
+                user_id: userId,
+                checkin_date: {
+                    gte: today,
+                    lt: new Date(today.getTime() + 24 * 60 * 60 * 1000)
+                }
+            }
+        });
+        
+        if (existingCheckin) {
+            return res.status(400).json({
+                success: false,
+                message: 'Você já fez check-in hoje. Volte amanhã!'
+            });
+        }
+        
+        // Calcular próximo horário de check-in (amanhã às 00:00)
+        const nextCheckin = new Date(today);
+        nextCheckin.setDate(nextCheckin.getDate() + 1);
+        
+        // Criar registro de check-in
+        await prisma.dailyCheckin.create({
+            data: {
+                user_id: userId,
+                checkin_date: new Date(),
+                amount_received: 50,
+                next_checkin: nextCheckin
+            }
+        });
+        
+        // Adicionar saldo ao usuário
+        const updatedUser = await prisma.user.update({
+            where: { id: userId },
+            data: {
+                saldo: {
+                    increment: 50
+                }
+            },
+            select: {
+                saldo: true
+            }
+        });
+        
+        res.json({
+            success: true,
+            message: 'Check-in realizado com sucesso! +50 KZ adicionados.',
+            data: {
+                new_balance: updatedUser.saldo,
+                next_checkin: nextCheckin
+            }
+        });
+        
+    } catch (error) {
+        console.error('Erro no check-in:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para verificar status do check-in
+app.get('/api/checkin/status', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        // Buscar check-in de hoje
+        const todayCheckin = await prisma.dailyCheckin.findFirst({
+            where: {
+                user_id: userId,
+                checkin_date: {
+                    gte: today,
+                    lt: new Date(today.getTime() + 24 * 60 * 60 * 1000)
+                }
+            },
+            orderBy: {
+                checkin_date: 'desc'
+            }
+        });
+        
+        if (todayCheckin) {
+            // Já fez check-in hoje
+            const nextCheckin = new Date(todayCheckin.next_checkin);
+            res.json({
+                success: true,
+                data: {
+                    can_checkin: false,
+                    last_checkin: todayCheckin.checkin_date,
+                    next_checkin: nextCheckin,
+                    amount_received: todayCheckin.amount_received
+                }
+            });
+        } else {
+            // Pode fazer check-in
+            const nextCheckin = new Date(today);
+            nextCheckin.setDate(nextCheckin.getDate() + 1);
+            
+            res.json({
+                success: true,
+                data: {
+                    can_checkin: true,
+                    next_checkin: nextCheckin
+                }
+            });
+        }
+        
+    } catch (error) {
+        console.error('Erro ao verificar status do check-in:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para obter histórico de check-ins
+app.get('/api/checkin/history', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { page = 1, limit = 30 } = req.query;
+        
+        const checkins = await prisma.dailyCheckin.findMany({
+            where: { user_id: userId },
+            orderBy: { checkin_date: 'desc' },
+            skip: (parseInt(page) - 1) * parseInt(limit),
+            take: parseInt(limit),
+            select: {
+                id: true,
+                checkin_date: true,
+                amount_received: true
+            }
+        });
+        
+        const total = await prisma.dailyCheckin.count({
+            where: { user_id: userId }
+        });
+        
+        res.json({
+            success: true,
+            data: {
+                checkins,
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total,
+                    pages: Math.ceil(total / parseInt(limit))
+                }
+            }
+        });
+        
+    } catch (error) {
+        console.error('Erro ao buscar histórico de check-ins:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
 // Iniciar servidor
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Servidor rodando na porta ${PORT}`);

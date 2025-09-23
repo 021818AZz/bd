@@ -8,25 +8,26 @@ datasource db {
 }
 
 model User {
-  id               String   @id @default(auto()) @map("_id") @db.ObjectId
-  mobile           String   @unique
+  id               String          @id @default(auto()) @map("_id") @db.ObjectId
+  mobile           String          @unique
   password         String
   pay_password     String
   nickname         String?
-  sex              Int?     // 1 = Masculino, 2 = Feminino
+  sex              Int?            // 1 = Masculino, 2 = Feminino
   head_img         String?
-  saldo            Float    @default(570)
-  invitation_code  String   @unique
-  inviter_id       String?  @db.ObjectId
-  created_at       DateTime @default(now())
-  updated_at       DateTime @updatedAt
+  saldo            Float           @default(570)
+  invitation_code  String          @unique
+  inviter_id       String?         @db.ObjectId
+  created_at       DateTime        @default(now())
+  updated_at       DateTime        @updatedAt
 
   // Relações
-  inviter         User?           @relation("UserInviter", fields: [inviter_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  referrals       User[]          @relation("UserInviter")
-  referralLevels  ReferralLevel[] @relation("ReferralUser")
-  referredAs      ReferralLevel[] @relation("ReferralReferrer")
-  bankAccount     BankAccount?
+  inviter          User?           @relation("UserInviter", fields: [inviter_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  referrals        User[]          @relation("UserInviter")
+  referralLevels   ReferralLevel[] @relation("ReferralUser")
+  referredAs       ReferralLevel[] @relation("ReferralReferrer")
+  bankAccount      BankAccount?
+  dailyCheckins    DailyCheckin[]  // inverso da relação com checkins
 
   @@map("users")
 }
@@ -59,4 +60,19 @@ model ReferralLevel {
 
   @@unique([user_id, referrer_id, level])
   @@map("referral_levels")
+}
+
+model DailyCheckin {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  user_id         String   @db.ObjectId
+  checkin_date    DateTime
+  amount_received Int
+  next_checkin    DateTime
+  created_at      DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+  @@index([checkin_date])
+  @@map("daily_checkins")
 }
