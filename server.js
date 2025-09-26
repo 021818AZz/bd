@@ -2398,7 +2398,7 @@ app.get('/api/team/statistics', authenticateToken, async (req, res) => {
 
         const responseData = {
             team_overview: {
-                invitation_link: `https://bd-1-tile.onrender.com/register?ref=${user.invitation_code}`,
+                invitation_link: `https://hamister203.com/register?ref=${user.invitation_code}`,
                 people_added: referralCounts.total,
                 income_added: bonusTotals.total
             },
