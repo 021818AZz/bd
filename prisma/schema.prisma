@@ -8,7 +8,7 @@ datasource db {
 }
 
 model User {
-  id               String          @id @default(auto()) @map("_id") @db.ObjectId
+  id               String          @id @map("_id") @default(auto()) @db.ObjectId
   mobile           String          @unique
   password         String
   pay_password     String
@@ -21,19 +21,35 @@ model User {
   created_at       DateTime        @default(now())
   updated_at       DateTime        @updatedAt
 
-  // Relações
   inviter          User?           @relation("UserInviter", fields: [inviter_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   referrals        User[]          @relation("UserInviter")
-  referralLevels   ReferralLevel[] @relation("ReferralUser")
-  referredAs       ReferralLevel[] @relation("ReferralReferrer")
+
+  referralLevels   ReferralLevel[] @relation("ReferralLevelsUser")
+  referredAs       ReferralLevel[] @relation("ReferralLevelsReferrer")
+
+  referralBonusesGiven    ReferralBonus[] @relation("ReferralBonusesGiven")
+  referralBonusesReceived ReferralBonus[] @relation("ReferralBonusesReceived")
+
   bankAccount      BankAccount?
-  dailyCheckins    DailyCheckin[]  // inverso da relação com checkins
+  dailyCheckins    DailyCheckin[]
+  purchases        Purchase[]
+  transactions     Transaction[]
+  systemLogs       SystemLog[]
+  dailyTasks       DailyTask[]
+  userTaskStatus   UserTaskStatus?
+  withdrawals      Withdrawal[]
+  deposits         Deposit[]
+
+  chatMessages     ChatMessage[]
+  posts            Post[]
+  likes            Like[]
+  comments         Comment[]
 
   @@map("users")
 }
 
 model BankAccount {
-  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  id             String   @id @map("_id") @default(auto()) @db.ObjectId
   user_id        String   @unique @db.ObjectId
   bank_name      String
   account_holder String
@@ -42,37 +58,254 @@ model BankAccount {
   created_at     DateTime @default(now())
   updated_at     DateTime @updatedAt
 
-  // Relações
-  user User @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  user User @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@map("bank_accounts")
 }
 
 model ReferralLevel {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  user_id     String   @db.ObjectId
-  referrer_id String   @db.ObjectId
-  level       Int
-  created_at  DateTime @default(now())
+  id           String   @id @map("_id") @default(auto()) @db.ObjectId
+  referrer_id  String   @db.ObjectId
+  user_id      String   @db.ObjectId
+  level        Int
+  created_at   DateTime @default(now())
 
-  user        User     @relation("ReferralUser", fields: [user_id], references: [id])
-  referrer    User     @relation("ReferralReferrer", fields: [referrer_id], references: [id])
+  referrer     User     @relation("ReferralLevelsReferrer", fields: [referrer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user         User     @relation("ReferralLevelsUser", fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
-  @@unique([user_id, referrer_id, level])
-  @@map("referral_levels")
+  @@unique([referrer_id, user_id, level])
+  @@index([referrer_id])
+  @@index([user_id])
+}
+
+model ReferralBonus {
+  id                   String   @id @map("_id") @default(auto()) @db.ObjectId
+  referrer_id          String   @db.ObjectId
+  referred_user_id     String   @db.ObjectId
+  level                Int
+  purchase_amount      Float
+  bonus_amount         Float
+  bonus_percentage     Float
+  purchase_description String
+  created_at           DateTime @default(now())
+
+  referrer       User @relation("ReferralBonusesGiven", fields: [referrer_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  referred_user  User @relation("ReferralBonusesReceived", fields: [referred_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([referrer_id])
+  @@index([referred_user_id])
+  @@index([created_at])
 }
 
 model DailyCheckin {
-  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  id              String   @id @map("_id") @default(auto()) @db.ObjectId
   user_id         String   @db.ObjectId
   checkin_date    DateTime
   amount_received Int
   next_checkin    DateTime
   created_at      DateTime @default(now())
 
-  user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  user User @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([user_id])
   @@index([checkin_date])
   @@map("daily_checkins")
+}
+
+model Purchase {
+  id            String   @id @map("_id") @default(auto()) @db.ObjectId
+  user_id       String   @db.ObjectId
+  product_id    String
+  product_name  String
+  amount        Int
+  quantity      Int
+  daily_return  Int      @default(13)
+  cycle_days    Int      @default(30)
+  purchase_date DateTime
+  next_payout   DateTime
+  expiry_date   DateTime
+  status        String   @default("active")
+  total_earned  Int      @default(0)
+  payout_count  Int      @default(0)
+  last_payout   DateTime?
+  completed_at  DateTime?
+  created_at    DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([user_id])
+  @@index([next_payout])
+  @@index([status])
+  @@index([expiry_date])
+}
+
+model Transaction {
+  id            String   @id @map("_id") @default(auto()) @db.ObjectId
+  user_id       String   @db.ObjectId
+  type          String
+  amount        Int
+  description   String
+  balance_after Int
+  created_at    DateTime @default(now())
+
+  user User @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([user_id])
+  @@index([type])
+  @@index([created_at])
+}
+
+model SystemLog {
+  id          String   @id @map("_id") @default(auto()) @db.ObjectId
+  action      String
+  description String
+  user_id     String?  @db.ObjectId
+  created_at  DateTime @default(now())
+
+  user User? @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([action])
+  @@index([created_at])
+}
+
+model DailyTask {
+  id          String   @id @map("_id") @default(auto()) @db.ObjectId
+  user_id     String   @db.ObjectId
+  task_date   DateTime
+  task_type   String
+  amount      Float
+  description String
+  status      String   @default("completed")
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  user User @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([user_id])
+  @@index([task_date])
+  @@index([user_id, task_date])
+  @@map("daily_tasks")
+}
+
+model UserTaskStatus {
+  id                      String   @id @map("_id") @default(auto()) @db.ObjectId
+  user_id                 String   @unique @db.ObjectId
+  last_task_date          DateTime
+  daily_checkin_completed Boolean  @default(false)
+  product_income_completed Boolean @default(false)
+  created_at              DateTime @default(now())
+  updated_at              DateTime @updatedAt
+
+  user User @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("user_task_status")
+}
+
+model Withdrawal {
+  id           String   @id @map("_id") @default(auto()) @db.ObjectId
+  user_id      String   @db.ObjectId
+  amount       Float
+  tax          Float
+  net_amount   Float
+  account_name String
+  iban         String
+  bank_name    String
+  bank_code    String
+  status       String   @default("pending")
+  created_at   DateTime @default(now())
+  processed_at DateTime?
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id])
+  @@index([status])
+  @@index([created_at])
+}
+
+model Deposit {
+  id           String   @id @map("_id") @default(auto()) @db.ObjectId
+  user_id      String   @db.ObjectId
+  amount       Float
+  account_name String
+  iban         String
+  bank_name    String
+  bank_code    String
+  status       String   @default("pending")
+  receipt_image String?
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+  processed_at DateTime?
+
+  user User @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([user_id])
+  @@index([status])
+  @@index([created_at])
+  @@map("deposits")
+}
+
+model ChatMessage {
+  id          String      @id @map("_id") @default(cuid())
+  user_id     String      @db.ObjectId
+  user        User        @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  message     String?
+  image_url   String?
+  message_type MessageType @default(TEXT)
+  is_from_user Boolean     @default(true)
+  is_read     Boolean      @default(false)
+  created_at  DateTime     @default(now())
+  updated_at  DateTime     @updatedAt
+
+  @@index([user_id])
+  @@index([created_at])
+}
+
+model Post {
+  id           String   @id @map("_id") @default(cuid())
+  user_id      String   @db.ObjectId
+  user         User     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  content      String?
+  images       String[]
+  like_count   Int      @default(0)
+  comment_count Int     @default(0)
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  likes       Like[]
+  comments    Comment[]
+
+  @@index([user_id])
+  @@index([created_at])
+}
+
+model Like {
+  id          String   @id @map("_id") @default(cuid())
+  user_id     String   @db.ObjectId
+  user        User     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  post_id     String   @db.ObjectId
+  post        Post     @relation(fields: [post_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  created_at  DateTime @default(now())
+
+  @@unique([user_id, post_id])
+  @@index([post_id])
+}
+
+model Comment {
+  id          String   @id @map("_id") @default(cuid())
+  user_id     String   @db.ObjectId
+  user        User     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  post_id     String   @db.ObjectId
+  post        Post     @relation(fields: [post_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  content     String
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@index([post_id])
+  @@index([user_id])
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  SYSTEM
 }
