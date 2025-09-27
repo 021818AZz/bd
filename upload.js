@@ -1,7 +1,7 @@
 const express = require('express');
 const multer = require('multer');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
-const { cloudinary } = require('./cloudinary'); // apenas cloudinary
+const { cloudinary } = require('./cloudinary'); // só cloudinary
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
@@ -19,7 +19,7 @@ const storage = new CloudinaryStorage({
     public_id: (req, file) => {
       const timestamp = Date.now();
       const random = Math.random().toString(36).substring(7);
-      return `deposit_${req.user.id}_${timestamp}_${random}`;
+      return `deposit_${req.user?.id || 'anon'}_${timestamp}_${random}`;
     }
   },
 });
@@ -50,17 +50,10 @@ router.post('/upload', parser.single('image'), async (req, res) => {
 
     res.json({ success: true, imageUrl, user: updatedUser });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, message: 'Erro ao enviar imagem' });
+    console.error("Erro upload perfil:", err.message, err.stack);
+    res.status(500).json({ success: false, message: err.message || 'Erro ao enviar imagem' });
   }
 });
-
-console.log("Cloudinary vars:", {
-  name: process.env.CLOUDINARY_CLOUD_NAME,
-  key: process.env.CLOUDINARY_API_KEY ? "OK" : "MISSING",
-  secret: process.env.CLOUDINARY_API_SECRET ? "OK" : "MISSING"
-});
-
 
 // Upload de comprovante de depósito
 router.post('/deposit-receipt', parser.single('receipt'), async (req, res) => {
@@ -107,13 +100,13 @@ router.post('/deposit-receipt', parser.single('receipt'), async (req, res) => {
       message: 'Comprovante enviado com sucesso'
     });
   } catch (err) {
-    console.error(err);
+    console.error("Erro depósito:", err.message, err.stack);
 
     if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({ success: false, message: 'Arquivo muito grande. Máximo 5MB.' });
     }
 
-    res.status(500).json({ success: false, message: 'Erro ao enviar comprovante' });
+    res.status(500).json({ success: false, message: err.message || 'Erro ao enviar comprovante' });
   }
 });
 
@@ -137,8 +130,8 @@ router.get('/user-receipts', async (req, res) => {
 
     res.json({ success: true, data: deposits });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ success: false, message: 'Erro ao buscar comprovantes' });
+    console.error("Erro listar comprovantes:", err.message, err.stack);
+    res.status(500).json({ success: false, message: err.message || 'Erro ao buscar comprovantes' });
   }
 });
 
