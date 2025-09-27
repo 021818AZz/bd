@@ -55,6 +55,13 @@ router.post('/upload', parser.single('image'), async (req, res) => {
   }
 });
 
+console.log("Cloudinary vars:", {
+  name: process.env.CLOUDINARY_CLOUD_NAME,
+  key: process.env.CLOUDINARY_API_KEY ? "OK" : "MISSING",
+  secret: process.env.CLOUDINARY_API_SECRET ? "OK" : "MISSING"
+});
+
+
 // Upload de comprovante de depósito
 router.post('/deposit-receipt', parser.single('receipt'), async (req, res) => {
   try {
