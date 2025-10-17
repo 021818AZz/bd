@@ -214,13 +214,13 @@ app.post('/login', async (req, res) => {
 // Rota de registro (pública)
 app.post('/register', async (req, res) => {
     try {
-        const { mobile, password, pay_password, invitation_code, saldo } = req.body;
+        const { mobile, password, invitation_code, saldo } = req.body;
         
-        // Validações básicas
-        if (!mobile || !password || !pay_password) {
+        // ✅ VALIDAÇÃO ATUALIZADA (sem pay_password)
+        if (!mobile || !password) {
             return res.status(400).json({
                 success: false,
-                message: 'Telefone, senha e senha de pagamento são obrigatórios'
+                message: 'Telefone e senha são obrigatórios'
             });
         }
 
@@ -264,11 +264,10 @@ app.post('/register', async (req, res) => {
             if (!existingCode) isUnique = true;
         }
 
-        // Criptografar senhas
+        // ✅ APENAS CRIPTOGRAFAR SENHA (sem pay_password)
         const hashedPassword = await bcrypt.hash(password, 10);
-        const hashedPayPassword = await bcrypt.hash(pay_password, 10);
 
-        // Criar usuário
+        // ✅ CRIAR USUÁRIO SEM pay_password
         const newUser = await prisma.user.create({
             data: {
                 mobile,
