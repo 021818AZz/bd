@@ -11,7 +11,6 @@ model User {
   id               String          @id @map("_id") @default(auto()) @db.ObjectId
   mobile           String          @unique
   password         String
-  pay_password     String
   nickname         String?
   sex              Int?            // 1 = Masculino, 2 = Feminino
   head_img         String?

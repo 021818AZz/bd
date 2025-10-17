@@ -273,7 +273,6 @@ app.post('/register', async (req, res) => {
             data: {
                 mobile,
                 password: hashedPassword,
-                pay_password: hashedPayPassword,
                 invitation_code: invitationCode,
                 saldo: saldo || 570,
                 inviter_id: inviterId,
