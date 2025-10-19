@@ -3,14 +3,18 @@ const cors = require('cors');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
-
-const prisma = new PrismaClient();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 const JWT_SECRET = process.env.JWT_SECRET || 'seu_segredo_jwt_super_seguro_aqui';
 const uploadRouter = require('./upload');
-
+const prisma = new PrismaClient({
+  log: ['query', 'error', 'warn'],
+  transactionOptions: {
+    maxWait: 10000,    // 10 segundos
+    timeout: 30000,    // 30 segundos
+  }
+});
 
 // Middleware otimizado
 app.use(cors({
@@ -78,6 +82,536 @@ const authenticateToken = async (req, res, next) => {
         });
     }
 };
+// ==============================================
+// ADMIN ROUTES
+// ==============================================
+
+// Middleware de verificação de admin
+const requireAdmin = (req, res, next) => {
+    // Em produção, implemente uma verificação real de admin
+    // Por enquanto, vamos usar um token simples
+    const adminToken = req.headers['authorization']?.replace('Bearer ', '');
+    
+    if (adminToken === 'admin_secret_token_123') {
+        next();
+    } else {
+        res.status(403).json({
+            success: false,
+            message: 'Acesso não autorizado. Token de administrador necessário.'
+        });
+    }
+};
+
+// Rota para admin - listar todos os usuários
+app.get('/api/admin/users', requireAdmin, async (req, res) => {
+    try {
+        const users = await prisma.user.findMany({
+            select: {
+                id: true,
+                mobile: true,
+                saldo: true,
+                invitation_code: true,
+                created_at: true,
+                _count: {
+                    select: {
+                        purchases: true,
+                        referralLevels: true
+                    }
+                }
+            },
+            orderBy: { created_at: 'desc' }
+        });
+
+        const formattedUsers = users.map(user => ({
+            id: user.id,
+            mobile: user.mobile,
+            saldo: user.saldo,
+            invitation_code: user.invitation_code,
+            created_at: user.created_at,
+            purchase_count: user._count.purchases,
+            referral_count: user._count.referralLevels
+        }));
+
+        const totalBalance = users.reduce((sum, user) => sum + (user.saldo || 0), 0);
+
+        res.json({
+            success: true,
+            data: {
+                users: formattedUsers,
+                total: users.length,
+                total_balance: totalBalance
+            }
+        });
+    } catch (error) {
+        console.error('Erro ao buscar usuários:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Erro interno do servidor' 
+        });
+    }
+});
+
+// Rota para admin - listar todos os depósitos
+app.get('/api/admin/deposits', requireAdmin, async (req, res) => {
+    try {
+        const deposits = await prisma.deposit.findMany({
+            include: {
+                user: {
+                    select: { 
+                        id: true,
+                        mobile: true 
+                    }
+                }
+            },
+            orderBy: { created_at: 'desc' }
+        });
+
+        const formattedDeposits = deposits.map(deposit => ({
+            id: deposit.id,
+            user_id: deposit.user_id,
+            user_mobile: deposit.user.mobile,
+            amount: deposit.amount,
+            account_name: deposit.account_name,
+            iban: deposit.iban,
+            bank_name: deposit.bank_name,
+            bank_code: deposit.bank_code,
+            receipt_image: deposit.receipt_image,
+            status: deposit.status,
+            created_at: deposit.created_at,
+            updated_at: deposit.updated_at,
+            processed_at: deposit.processed_at
+        }));
+
+        res.json({
+            success: true,
+            data: formattedDeposits
+        });
+    } catch (error) {
+        console.error('Erro ao buscar depósitos:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Erro interno do servidor' 
+        });
+    }
+});
+
+// Rota para admin - listar todos os saques
+app.get('/api/admin/withdrawals', requireAdmin, async (req, res) => {
+    try {
+        const withdrawals = await prisma.withdrawal.findMany({
+            include: {
+                user: {
+                    select: { 
+                        id: true,
+                        mobile: true 
+                    }
+                }
+            },
+            orderBy: { created_at: 'desc' }
+        });
+
+        const formattedWithdrawals = withdrawals.map(withdrawal => ({
+            id: withdrawal.id,
+            user_id: withdrawal.user_id,
+            user_mobile: withdrawal.user.mobile,
+            amount: withdrawal.amount,
+            tax: withdrawal.tax,
+            net_amount: withdrawal.net_amount,
+            account_name: withdrawal.account_name,
+            iban: withdrawal.iban,
+            bank_name: withdrawal.bank_name,
+            bank_code: withdrawal.bank_code,
+            status: withdrawal.status,
+            created_at: withdrawal.created_at,
+            processed_at: withdrawal.processed_at
+        }));
+
+        res.json({
+            success: true,
+            data: formattedWithdrawals
+        });
+    } catch (error) {
+        console.error('Erro ao buscar saques:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Erro interno do servidor' 
+        });
+    }
+});
+
+// Rota para admin - listar todas as transações
+app.get('/api/admin/transactions', requireAdmin, async (req, res) => {
+    try {
+        const transactions = await prisma.transaction.findMany({
+            include: {
+                user: {
+                    select: { 
+                        id: true,
+                        mobile: true 
+                    }
+                }
+            },
+            orderBy: { created_at: 'desc' },
+            take: 200
+        });
+
+        const formattedTransactions = transactions.map(transaction => ({
+            id: transaction.id,
+            user_id: transaction.user_id,
+            user_mobile: transaction.user.mobile,
+            type: transaction.type,
+            amount: transaction.amount,
+            description: transaction.description,
+            balance_after: transaction.balance_after,
+            created_at: transaction.created_at
+        }));
+
+        res.json({
+            success: true,
+            data: formattedTransactions
+        });
+    } catch (error) {
+        console.error('Erro ao buscar transações:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Erro interno do servidor' 
+        });
+    }
+});
+
+// Rota para admin - aprovar depósito (VERSÃO CORRIGIDA)
+app.put('/api/admin/deposit/:id/approve', requireAdmin, async (req, res) => {
+    let transaction;
+    try {
+        const { id } = req.params;
+        
+        console.log(`🔄 Iniciando aprovação do depósito: ${id}`);
+        
+        // Buscar o depósito
+        const deposit = await prisma.deposit.findUnique({
+            where: { id: id },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        mobile: true,
+                        saldo: true
+                    }
+                }
+            }
+        });
+
+        if (!deposit) {
+            console.log(`❌ Depósito não encontrado: ${id}`);
+            return res.status(404).json({
+                success: false,
+                message: 'Depósito não encontrado'
+            });
+        }
+
+        if (deposit.status === 'completed') {
+            console.log(`⚠️ Depósito já processado: ${id}`);
+            return res.status(400).json({
+                success: false,
+                message: 'Depósito já foi processado'
+            });
+        }
+
+        console.log(`💰 Processando depósito: ${deposit.amount} KZ para usuário ${deposit.user.mobile}`);
+
+        // Processar transação de aprovação COM TIMEOUT AUMENTADO
+        transaction = await prisma.$transaction(async (tx) => {
+            console.log('✅ Transação iniciada');
+
+            // 1. Adicionar saldo ao usuário
+            const updatedUser = await tx.user.update({
+                where: { id: deposit.user_id },
+                data: {
+                    saldo: {
+                        increment: deposit.amount
+                    }
+                },
+                select: {
+                    saldo: true,
+                    mobile: true
+                }
+            });
+
+            console.log(`✅ Saldo atualizado: ${deposit.user.mobile} = ${updatedUser.saldo} KZ`);
+
+            // 2. Atualizar status do depósito
+            const updatedDeposit = await tx.deposit.update({
+                where: { id: id },
+                data: {
+                    status: 'completed',
+                    processed_at: new Date()
+                }
+            });
+
+            console.log(`✅ Status do depósito atualizado para: completed`);
+
+            // 3. Registrar transação
+            const transactionRecord = await tx.transaction.create({
+                data: {
+                    user_id: deposit.user_id,
+                    type: 'deposit',
+                    amount: deposit.amount,
+                    description: `Depósito aprovado - ${deposit.bank_name}`,
+                    balance_after: updatedUser.saldo,
+                    created_at: new Date()
+                }
+            });
+
+            console.log(`✅ Transação registrada: ${transactionRecord.id}`);
+
+            // 4. Registrar log
+            await tx.systemLog.create({
+                data: {
+                    action: 'DEPOSIT_APPROVED',
+                    description: `Depósito ${id} aprovado. Valor: ${deposit.amount} KZ. Usuário: ${deposit.user.mobile}`,
+                    user_id: deposit.user_id,
+                    created_at: new Date()
+                }
+            });
+
+            console.log(`✅ Log do sistema registrado`);
+
+            return {
+                deposit: updatedDeposit,
+                new_balance: updatedUser.saldo
+            };
+        }, {
+            maxWait: 10000,    // 10 segundos
+            timeout: 30000     // 30 segundos
+        });
+
+        console.log(`🎉 Depósito aprovado com sucesso: ${id}`);
+
+        res.json({
+            success: true,
+            message: 'Depósito aprovado com sucesso',
+            data: result
+        });
+
+    } catch (error) {
+        console.error('❌ ERRO ao aprovar depósito:', error);
+        
+        if (error.code === 'P2028') {
+            console.error('❌ ERRO: Timeout da transação excedido');
+            return res.status(500).json({
+                success: false,
+                message: 'Tempo limite da transação excedido. Tente novamente.'
+            });
+        }
+
+        if (error.code === 'P2034') {
+            console.error('❌ ERRO: Transação falhou');
+            return res.status(500).json({
+                success: false,
+                message: 'Transação falhou. Tente novamente.'
+            });
+        }
+
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor: ' + error.message
+        });
+    }
+});
+// Rota para admin - rejeitar depósito
+app.put('/api/admin/deposit/:id/reject', requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+        
+        const deposit = await prisma.deposit.findUnique({
+            where: { id: id },
+            include: {
+                user: {
+                    select: {
+                        mobile: true
+                    }
+                }
+            }
+        });
+
+        if (!deposit) {
+            return res.status(404).json({
+                success: false,
+                message: 'Depósito não encontrado'
+            });
+        }
+
+        const updatedDeposit = await prisma.deposit.update({
+            where: { id: id },
+            data: {
+                status: 'failed',
+                processed_at: new Date()
+            }
+        });
+
+        await prisma.systemLog.create({
+            data: {
+                action: 'DEPOSIT_REJECTED',
+                description: `Depósito ${id} rejeitado. Motivo: ${reason || 'Não especificado'}. Usuário: ${deposit.user.mobile}`,
+                user_id: deposit.user_id,
+                created_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: 'Depósito rejeitado com sucesso',
+            data: updatedDeposit
+        });
+
+    } catch (error) {
+        console.error('Erro ao rejeitar depósito:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para admin - aprovar saque
+app.put('/api/admin/withdrawal/:id/approve', requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const withdrawal = await prisma.withdrawal.findUnique({
+            where: { id: id },
+            include: {
+                user: {
+                    select: {
+                        mobile: true
+                    }
+                }
+            }
+        });
+
+        if (!withdrawal) {
+            return res.status(404).json({
+                success: false,
+                message: 'Saque não encontrado'
+            });
+        }
+
+        const updatedWithdrawal = await prisma.withdrawal.update({
+            where: { id: id },
+            data: {
+                status: 'completed',
+                processed_at: new Date()
+            }
+        });
+
+        await prisma.systemLog.create({
+            data: {
+                action: 'WITHDRAWAL_APPROVED',
+                description: `Saque ${id} aprovado. Valor: ${withdrawal.amount} KZ. Usuário: ${withdrawal.user.mobile}`,
+                user_id: withdrawal.user_id,
+                created_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: 'Saque aprovado com sucesso',
+            data: updatedWithdrawal
+        });
+
+    } catch (error) {
+        console.error('Erro ao aprovar saque:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para admin - rejeitar saque
+app.put('/api/admin/withdrawal/:id/reject', requireAdmin, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+        
+        const withdrawal = await prisma.withdrawal.findUnique({
+            where: { id: id },
+            include: {
+                user: {
+                    select: {
+                        mobile: true,
+                        saldo: true
+                    }
+                }
+            }
+        });
+
+        if (!withdrawal) {
+            return res.status(404).json({
+                success: false,
+                message: 'Saque não encontrado'
+            });
+        }
+
+        // Devolver saldo ao usuário
+        await prisma.$transaction(async (tx) => {
+            // 1. Devolver saldo
+            const updatedUser = await tx.user.update({
+                where: { id: withdrawal.user_id },
+                data: {
+                    saldo: {
+                        increment: withdrawal.amount
+                    }
+                }
+            });
+
+            // 2. Atualizar status do saque
+            await tx.withdrawal.update({
+                where: { id: id },
+                data: {
+                    status: 'failed',
+                    processed_at: new Date()
+                }
+            });
+
+            // 3. Registrar transação de devolução
+            await tx.transaction.create({
+                data: {
+                    user_id: withdrawal.user_id,
+                    type: 'withdrawal_refund',
+                    amount: withdrawal.amount,
+                    description: `Devolução de saque rejeitado`,
+                    balance_after: updatedUser.saldo,
+                    created_at: new Date()
+                }
+            });
+
+            // 4. Registrar log
+            await tx.systemLog.create({
+                data: {
+                    action: 'WITHDRAWAL_REJECTED',
+                    description: `Saque ${id} rejeitado. Motivo: ${reason}. Valor devolvido: ${withdrawal.amount} KZ. Usuário: ${withdrawal.user.mobile}`,
+                    user_id: withdrawal.user_id,
+                    created_at: new Date()
+                }
+            });
+        });
+
+        res.json({
+            success: true,
+            message: 'Saque rejeitado com sucesso. Valor devolvido ao usuário.',
+            data: withdrawal
+        });
+
+    } catch (error) {
+        console.error('Erro ao rejeitar saque:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
 
 // Middleware de autorização (verifica se o usuário acessa apenas seus próprios dados)
 const authorizeUser = (req, res, next) => {
@@ -3674,6 +4208,8 @@ app.post('/api/admin/chat/:userId/respond', authenticateToken, async (req, res) 
         });
     }
 });
+
+
 
 // Função auxiliar para upload de imagens
 async function uploadImage(file) {
