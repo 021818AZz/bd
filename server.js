@@ -273,7 +273,7 @@ app.post('/register', async (req, res) => {
                 mobile,
                 password: hashedPassword,
                 invitation_code: invitationCode,
-                saldo: saldo || 570,
+                saldo: saldo || 400,
                 inviter_id: inviterId,
                 created_at: new Date(),
                 updated_at: new Date()
@@ -2072,14 +2072,15 @@ app.post('/api/tasks/daily-checkin', authenticateToken, async (req, res) => {
     }
 });
 
+// Rota para coletar rendimentos dos produtos (Realizar Tarefas)
 app.post('/api/tasks/collect-product-income', authenticateToken, async (req, res) => {
-    const userId = req.user.id;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
     try {
-        // Verifica se já coletou hoje
-        const existing = await prisma.dailyTask.findFirst({
+        const userId = req.user.id;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        // Verificar se já coletou rendimentos hoje
+        const existingCollection = await prisma.dailyTask.findFirst({
             where: {
                 user_id: userId,
                 task_type: 'product_income',
@@ -2089,56 +2090,88 @@ app.post('/api/tasks/collect-product-income', authenticateToken, async (req, res
                 }
             }
         });
-        if (existing) {
+
+        if (existingCollection) {
             return res.status(400).json({
                 success: false,
                 message: 'Você já coletou os rendimentos hoje. Volte amanhã!'
             });
         }
 
-        // Compras ativas
+        // Verificar compras ativas
         const activePurchases = await prisma.purchase.findMany({
             where: {
                 user_id: userId,
                 status: 'active',
-                expiry_date: { gt: new Date() }
+                expiry_date: {
+                    gt: new Date()
+                }
             }
         });
-        if (activePurchases.length === 0)
+
+        if (activePurchases.length === 0) {
             return res.status(400).json({
                 success: false,
                 message: 'Você não tem compras ativas para gerar rendimentos.'
             });
+        }
 
-        const totalIncome = activePurchases.reduce((s, p) => s + (p.daily_return || 0), 0);
-        if (totalIncome <= 0)
+        // Calcular total de rendimentos
+        const totalIncome = activePurchases.reduce((sum, purchase) => {
+            return sum + (purchase.daily_return || 0);
+        }, 0);
+
+        if (totalIncome <= 0) {
             return res.status(400).json({
                 success: false,
                 message: 'Nenhum rendimento disponível para coleta.'
             });
+        }
 
-        // IDs das compras
-        const purchaseIds = activePurchases.map(p => p.id);
-
-        // =============== TRANSAÇÃO CURTA (somente saldo + registros principais) ===============
+        // Processar transação
         const result = await prisma.$transaction(async (tx) => {
+            // 1. Adicionar saldo ao usuário
             const updatedUser = await tx.user.update({
                 where: { id: userId },
-                data: { saldo: { increment: totalIncome } },
-                select: { saldo: true, mobile: true }
+                data: {
+                    saldo: {
+                        increment: totalIncome
+                    }
+                },
+                select: {
+                    saldo: true,
+                    mobile: true
+                }
             });
 
+            // 2. Registrar tarefa concluída
             const task = await tx.dailyTask.create({
                 data: {
                     user_id: userId,
-                    task_type: 'product_income',
                     task_date: new Date(),
+                    task_type: 'product_income',
                     amount: totalIncome,
-                    description: `Rendimentos coletados de ${activePurchases.length} produto(s)`,
+                    description: `Rendimentos coletados de ${activePurchases.length} produto(s) ativo(s)`,
                     status: 'completed'
                 }
             });
 
+            // 3. Atualizar status do usuário
+            await tx.userTaskStatus.upsert({
+                where: { user_id: userId },
+                update: {
+                    product_income_completed: true,
+                    updated_at: new Date()
+                },
+                create: {
+                    user_id: userId,
+                    daily_checkin_completed: false,
+                    product_income_completed: true,
+                    last_task_date: new Date()
+                }
+            });
+
+            // 4. Registrar transação
             await tx.transaction.create({
                 data: {
                     user_id: userId,
@@ -2150,66 +2183,60 @@ app.post('/api/tasks/collect-product-income', authenticateToken, async (req, res
                 }
             });
 
-            return { updatedUser, task };
-        });
-
-        // =============== OPERAÇÕES FORA DA TRANSAÇÃO ===============
-        // Atualizar todas as compras (pode demorar, mas não trava o saldo)
-        await prisma.purchase.updateMany({
-            where: { id: { in: purchaseIds } },
-            data: {
-                last_payout: new Date(),
-                total_earned: { increment: totalIncome / activePurchases.length },
-                payout_count: { increment: 1 }
+            // 5. Atualizar último payout das compras
+            for (const purchase of activePurchases) {
+                await tx.purchase.update({
+                    where: { id: purchase.id },
+                    data: {
+                        last_payout: new Date(),
+                        total_earned: {
+                            increment: purchase.daily_return || 0
+                        },
+                        payout_count: {
+                            increment: 1
+                        }
+                    }
+                });
             }
+
+            // 6. Registrar log
+            await tx.systemLog.create({
+                data: {
+                    action: 'PRODUCT_INCOME_COLLECTION',
+                    description: `Usuário ${updatedUser.mobile} coletou ${totalIncome} KZ de ${activePurchases.length} produto(s)`,
+                    user_id: userId,
+                    created_at: new Date()
+                }
+            });
+
+            return {
+                new_balance: updatedUser.saldo,
+                task: task,
+                total_income: totalIncome,
+                products_count: activePurchases.length
+            };
         });
 
-        // Atualizar status e log
-        await prisma.userTaskStatus.upsert({
-            where: { user_id: userId },
-            update: {
-                product_income_completed: true,
-                updated_at: new Date()
-            },
-            create: {
-                user_id: userId,
-                daily_checkin_completed: false,
-                product_income_completed: true,
-                last_task_date: new Date()
-            }
-        });
-
-        await prisma.systemLog.create({
-            data: {
-                action: 'PRODUCT_INCOME_COLLECTION',
-                description: `Usuário ${result.updatedUser.mobile} coletou ${totalIncome} KZ de ${activePurchases.length} produto(s)`,
-                user_id: userId,
-                created_at: new Date()
-            }
-        });
-
-        return res.json({
+        res.json({
             success: true,
             message: `Rendimentos coletados com sucesso! +${totalIncome} KZ adicionados.`,
             data: {
-                new_balance: result.updatedUser.saldo,
+                new_balance: result.new_balance,
                 total_income: totalIncome,
-                products_count: activePurchases.length
+                products_count: result.products_count,
+                products: activePurchases.map(p => ({
+                    id: p.id,
+                    name: p.product_name,
+                    daily_income: p.daily_return
+                }))
             }
         });
+
     } catch (error) {
         console.error('Erro ao coletar rendimentos:', error);
-
-        if (error.code === 'P2028') {
-            return res.status(503).json({
-                success: false,
-                message: 'O servidor demorou para processar. Tente novamente em alguns segundos.'
-            });
-        }
-
         res.status(500).json({
             success: false,
-            message: 'Erro interno do servidor.'
+            message: 'Erro interno do servidor'
         });
     }
 });

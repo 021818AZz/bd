@@ -19,7 +19,7 @@ model User {
   nickname         String?
   sex              Int?            // 1 = Masculino, 2 = Feminino
   head_img         String?
-  saldo            Float           @default(570)
+  saldo            Float           @default(400)
   invitation_code  String          @unique
   inviter_id       String?         @db.ObjectId
   created_at       DateTime        @default(now())
