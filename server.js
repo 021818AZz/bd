@@ -1449,7 +1449,7 @@ app.post('/api/checkin', authenticateToken, async (req, res) => {
             data: {
                 user_id: userId,
                 checkin_date: new Date(),
-                amount_received: 50,
+                amount_received: 10,
                 next_checkin: nextCheckin
             }
         });
@@ -1459,7 +1459,7 @@ app.post('/api/checkin', authenticateToken, async (req, res) => {
             where: { id: userId },
             data: {
                 saldo: {
-                    increment: 50
+                    increment: 10
                 }
             },
             select: {
@@ -1469,7 +1469,7 @@ app.post('/api/checkin', authenticateToken, async (req, res) => {
         
         res.json({
             success: true,
-            message: 'Check-in realizado com sucesso! +50 KZ adicionados.',
+            message: 'Check-in realizado com sucesso! +10 KZ adicionados.',
             data: {
                 new_balance: updatedUser.saldo,
                 next_checkin: nextCheckin
