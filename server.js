@@ -2514,7 +2514,7 @@ app.post('/api/tasks/daily-checkin', authenticateToken, async (req, res) => {
             });
         }
 
-        const rewardAmount = 50;
+        const rewardAmount = 5;
 
         // Processar transação
         const result = await prisma.$transaction(async (tx) => {
@@ -2589,7 +2589,7 @@ app.post('/api/tasks/daily-checkin', authenticateToken, async (req, res) => {
 
         res.json({
             success: true,
-            message: 'Check-in realizado com sucesso! +50 KZ adicionados.',
+            message: 'Check-in realizado com sucesso! +5 KZ adicionados.',
             data: {
                 new_balance: result.new_balance,
                 reward: rewardAmount,
