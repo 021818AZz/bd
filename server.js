@@ -613,19 +613,2068 @@ app.put('/api/admin/withdrawal/:id/reject', requireAdmin, async (req, res) => {
     }
 });
 
-// Middleware de autorização (verifica se o usuário acessa apenas seus próprios dados)
-const authorizeUser = (req, res, next) => {
-    const userId = req.params.id;
-    
-    if (req.user.id !== userId) {
-        return res.status(403).json({
+
+
+// ==============================================
+// ADMIN2 ROUTES - GERENCIAMENTO DE SALDOS
+// ==============================================
+
+// Middleware de verificação de admin2 (COM DEBUG COMPLETO)
+const requireAdmin2 = (req, res, next) => {
+    try {
+        console.log('=== 🔐 DEBUG ADMIN2 MIDDLEWARE ===');
+        console.log('📨 Headers recebidos:', req.headers);
+        
+        const authHeader = req.headers['authorization'];
+        console.log('🔑 Authorization Header:', authHeader);
+        
+        if (!authHeader) {
+            console.log('❌ Nenhum header de autorização encontrado');
+            return res.status(403).json({
+                success: false,
+                message: 'Token de autorização não fornecido'
+            });
+        }
+
+        const token = authHeader.replace('Bearer ', '').trim();
+        console.log('🎫 Token extraído:', token);
+        
+        // Lista de tokens válidos
+        const validTokens = [
+            'admin2_super_token_456',
+            'admin_secret_token_123',
+            'admin2_token'
+        ];
+
+        console.log('✅ Tokens válidos:', validTokens);
+        console.log('🔍 Token está na lista?', validTokens.includes(token));
+
+        if (validTokens.includes(token)) {
+            console.log('✅ Token admin2 válido aceito - Requisição para:', req.path);
+            next();
+        } else {
+            console.log('❌ Token inválido recebido:', token);
+            console.log('📋 Tokens esperados:', validTokens);
+            res.status(403).json({
+                success: false,
+                message: 'Token de administrador inválido'
+            });
+        }
+        
+        console.log('=== 🔐 FIM DEBUG ===');
+    } catch (error) {
+        console.error('Erro na verificação do token:', error);
+        res.status(500).json({
             success: false,
-            message: 'Acesso não autorizado'
+            message: 'Erro na autenticação'
         });
     }
-    
-    next();
 };
+// AGORA SIM, ADICIONE TODAS AS ROTAS ADMIN2 AQUI:
+
+// Rota para admin2 - listar todos os usuários com saldos
+
+app.get('/api/admin2/users', requireAdmin2, async (req, res) => {
+    try {
+        const users = await prisma.user.findMany({
+            select: {
+                id: true,
+                mobile: true,
+                saldo: true,
+                invitation_code: true,
+                created_at: true,
+                _count: {
+                    select: {
+                        purchases: true,
+                        referralLevels: true
+                    }
+                }
+            },
+            orderBy: { created_at: 'desc' }
+        });
+
+        const formattedUsers = users.map(user => ({
+            id: user.id,
+            mobile: user.mobile,
+            saldo: user.saldo,
+            invitation_code: user.invitation_code,
+            created_at: user.created_at,
+            purchase_count: user._count.purchases,
+            referral_count: user._count.referralLevels
+        }));
+
+        const totalBalance = users.reduce((sum, user) => sum + (user.saldo || 0), 0);
+
+        res.json({
+            success: true,
+            data: {
+                users: formattedUsers,
+                total: users.length,
+                total_balance: totalBalance
+            }
+        });
+    } catch (error) {
+        console.error('Erro ao buscar usuários:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Erro interno do servidor' 
+        });
+    }
+});
+
+// Rota para admin2 - adicionar saldo a usuário
+app.post('/api/admin2/users/:id/add-balance', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { amount, description } = req.body;
+        
+        if (!amount || amount <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Valor deve ser maior que zero'
+            });
+        }
+
+        // Buscar o usuário
+        const user = await prisma.user.findUnique({
+            where: { id: id },
+            select: { id: true, mobile: true, saldo: true }
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Usuário não encontrado'
+            });
+        }
+
+        // Processar transação
+        await prisma.$transaction(async (tx) => {
+            // 1. Adicionar saldo ao usuário
+            const updatedUser = await tx.user.update({
+                where: { id: id },
+                data: {
+                    saldo: {
+                        increment: amount
+                    }
+                },
+                select: {
+                    saldo: true
+                }
+            });
+
+            // 2. Registrar transação
+            await tx.transaction.create({
+                data: {
+                    user_id: id,
+                    type: 'admin_addition',
+                    amount: amount,
+                    description: description || `Adição de saldo pelo administrador`,
+                    balance_after: updatedUser.saldo,
+                    created_at: new Date()
+                }
+            });
+
+            // 3. Registrar log
+            await tx.systemLog.create({
+                data: {
+                    action: 'ADMIN_BALANCE_ADD',
+                    description: `Admin adicionou ${amount} KZ para ${user.mobile}. Motivo: ${description || 'Não especificado'}`,
+                    user_id: id,
+                    created_at: new Date()
+                }
+            });
+        });
+
+        // Buscar usuário atualizado
+        const updatedUser = await prisma.user.findUnique({
+            where: { id: id },
+            select: { saldo: true, mobile: true }
+        });
+
+        res.json({
+            success: true,
+            message: `Saldo adicionado com sucesso! +${amount} KZ`,
+            data: {
+                user: {
+                    mobile: user.mobile,
+                    old_balance: user.saldo,
+                    new_balance: updatedUser.saldo,
+                    amount_added: amount
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao adicionar saldo:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// ==============================================
+// ADMIN2 ROUTES - NOVAS FUNCIONALIDADES COMPLETAS
+// ==============================================
+
+
+
+// Rota para eliminar usuário
+app.delete('/api/admin2/users/:id/delete', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Verificar se o usuário existe
+        const user = await prisma.user.findUnique({
+            where: { id: id },
+            include: {
+                _count: {
+                    select: {
+                        purchases: true,
+                        transactions: true,
+                        withdrawals: true,
+                        deposits: true
+                    }
+                }
+            }
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Usuário não encontrado'
+            });
+        }
+
+        // Eliminar o usuário e todos os dados relacionados
+        await prisma.$transaction(async (tx) => {
+            // 1. Eliminar dados relacionados
+            await tx.dailyTask.deleteMany({ where: { user_id: id } });
+            await tx.dailyCheckin.deleteMany({ where: { user_id: id } });
+            await tx.referralBonus.deleteMany({ where: { referrer_id: id } });
+            await tx.referralBonus.deleteMany({ where: { referred_user_id: id } });
+            await tx.referralLevel.deleteMany({ where: { referrer_id: id } });
+            await tx.referralLevel.deleteMany({ where: { user_id: id } });
+            await tx.transaction.deleteMany({ where: { user_id: id } });
+            await tx.withdrawal.deleteMany({ where: { user_id: id } });
+            await tx.deposit.deleteMany({ where: { user_id: id } });
+            await tx.purchase.deleteMany({ where: { user_id: id } });
+            await tx.systemLog.deleteMany({ where: { user_id: id } });
+            
+            // 2. Atualizar referências de usuários que foram convidados por este usuário
+            await tx.user.updateMany({
+                where: { inviter_id: id },
+                data: { inviter_id: null }
+            });
+
+            // 3. Eliminar o usuário
+            await tx.user.delete({
+                where: { id: id }
+            });
+        });
+
+        // Registrar log
+        await prisma.systemLog.create({
+            data: {
+                action: 'USER_DELETED_ADMIN2',
+                description: `Admin2 eliminou usuário ${user.mobile} e todos os dados relacionados`,
+                created_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: `Usuário ${user.mobile} eliminado com sucesso! Todos os dados relacionados foram removidos.`
+        });
+
+    } catch (error) {
+        console.error('Erro ao eliminar usuário:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para redefinir senha do usuário
+app.put('/api/admin2/users/:id/reset-password', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { new_password } = req.body;
+
+        if (!new_password) {
+            return res.status(400).json({
+                success: false,
+                message: 'Nova senha é obrigatória'
+            });
+        }
+
+        // Verificar se o usuário existe
+        const user = await prisma.user.findUnique({
+            where: { id: id }
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Usuário não encontrado'
+            });
+        }
+
+        // Criptografar nova senha
+        const hashedPassword = await bcrypt.hash(new_password, 10);
+
+        // Atualizar senha
+        await prisma.user.update({
+            where: { id: id },
+            data: {
+                password: hashedPassword,
+                updated_at: new Date()
+            }
+        });
+
+        // Registrar log
+        await prisma.systemLog.create({
+            data: {
+                action: 'PASSWORD_RESET_ADMIN2',
+                description: `Admin2 redefiniu senha do usuário ${user.mobile}`,
+                user_id: id,
+                created_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: 'Senha redefinida com sucesso!'
+        });
+
+    } catch (error) {
+        console.error('Erro ao redefinir senha:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para anular/eliminar compra
+app.delete('/api/admin2/purchases/:id/cancel', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+
+        // Buscar a compra
+        const purchase = await prisma.purchase.findUnique({
+            where: { id: id },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        mobile: true,
+                        saldo: true
+                    }
+                }
+            }
+        });
+
+        if (!purchase) {
+            return res.status(404).json({
+                success: false,
+                message: 'Compra não encontrada'
+            });
+        }
+
+        if (purchase.status === 'cancelled') {
+            return res.status(400).json({
+                success: false,
+                message: 'Compra já está cancelada'
+            });
+        }
+
+        // Processar cancelamento com reembolso
+        await prisma.$transaction(async (tx) => {
+            // 1. Reembolsar saldo ao usuário (se a compra estava ativa)
+            if (purchase.status === 'active') {
+                const updatedUser = await tx.user.update({
+                    where: { id: purchase.user_id },
+                    data: {
+                        saldo: {
+                            increment: purchase.amount
+                        }
+                    },
+                    select: {
+                        saldo: true
+                    }
+                });
+
+                // 2. Registrar transação de reembolso
+                await tx.transaction.create({
+                    data: {
+                        user_id: purchase.user_id,
+                        type: 'purchase_refund',
+                        amount: purchase.amount,
+                        description: `Reembolso de compra cancelada: ${purchase.product_name}`,
+                        balance_after: updatedUser.saldo,
+                        created_at: new Date()
+                    }
+                });
+            }
+
+            // 3. Marcar compra como cancelada
+            await tx.purchase.update({
+                where: { id: id },
+                data: {
+                    status: 'cancelled',
+                    expiry_date: new Date() // Define como expirada
+                }
+            });
+
+            // 4. Registrar log
+            await tx.systemLog.create({
+                data: {
+                    action: 'PURCHASE_CANCELLED_ADMIN2',
+                    description: `Admin2 cancelou compra ${id}. Produto: ${purchase.product_name}, Valor: ${purchase.amount} KZ. Motivo: ${reason || 'Não especificado'}`,
+                    user_id: purchase.user_id,
+                    created_at: new Date()
+                }
+            });
+        });
+
+        res.json({
+            success: true,
+            message: 'Compra cancelada com sucesso! Valor reembolsado ao usuário.'
+        });
+
+    } catch (error) {
+        console.error('Erro ao cancelar compra:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para adicionar produto manualmente (dar produto)
+app.post('/api/admin2/users/:id/add-product', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { product_name, amount, daily_return, cycle_days, quantity } = req.body;
+
+        if (!product_name || !amount) {
+            return res.status(400).json({
+                success: false,
+                message: 'Nome do produto e valor são obrigatórios'
+            });
+        }
+
+        // Verificar se o usuário existe
+        const user = await prisma.user.findUnique({
+            where: { id: id },
+            select: { id: true, mobile: true, saldo: true }
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Usuário não encontrado'
+            });
+        }
+
+        // Calcular datas
+        const nextPayout = new Date();
+        nextPayout.setHours(nextPayout.getHours() + 24);
+
+        const expiryDate = new Date();
+        expiryDate.setDate(expiryDate.getDate() + (cycle_days || 30));
+
+        // Criar produto manualmente
+        const purchase = await prisma.purchase.create({
+            data: {
+                user_id: id,
+                product_id: 'admin_gift_' + Date.now(),
+                product_name: product_name,
+                amount: amount,
+                quantity: quantity || 1,
+                daily_return: daily_return || 13,
+                cycle_days: cycle_days || 30,
+                purchase_date: new Date(),
+                next_payout: nextPayout,
+                expiry_date: expiryDate,
+                status: 'active',
+                total_earned: 0,
+                payout_count: 0
+            }
+        });
+
+        // Registrar log
+        await prisma.systemLog.create({
+            data: {
+                action: 'PRODUCT_ADDED_ADMIN2',
+                description: `Admin2 adicionou produto manualmente para ${user.mobile}. Produto: ${product_name}, Valor: ${amount} KZ`,
+                user_id: id,
+                created_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: 'Produto adicionado com sucesso!',
+            data: { purchase }
+        });
+
+    } catch (error) {
+        console.error('Erro ao adicionar produto:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para editar informações do usuário
+app.put('/api/admin2/users/:id/edit', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { mobile, nickname, sex, head_img } = req.body;
+
+        // Verificar se o usuário existe
+        const user = await prisma.user.findUnique({
+            where: { id: id }
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Usuário não encontrado'
+            });
+        }
+
+        // Atualizar dados
+        const updateData = { updated_at: new Date() };
+        if (mobile) updateData.mobile = mobile;
+        if (nickname !== undefined) updateData.nickname = nickname;
+        if (sex !== undefined) updateData.sex = sex;
+        if (head_img !== undefined) updateData.head_img = head_img;
+
+        const updatedUser = await prisma.user.update({
+            where: { id: id },
+            data: updateData,
+            select: {
+                id: true,
+                mobile: true,
+                nickname: true,
+                sex: true,
+                head_img: true,
+                saldo: true,
+                invitation_code: true,
+                updated_at: true
+            }
+        });
+
+        // Registrar log
+        await prisma.systemLog.create({
+            data: {
+                action: 'USER_EDITED_ADMIN2',
+                description: `Admin2 editou informações do usuário ${user.mobile}`,
+                user_id: id,
+                created_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: 'Informações do usuário atualizadas com sucesso!',
+            data: { user: updatedUser }
+        });
+
+    } catch (error) {
+        console.error('Erro ao editar usuário:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para simular ações do usuário (realizar tarefas em nome do usuário)
+app.post('/api/admin2/users/:id/simulate-action', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { action_type, amount, description } = req.body;
+
+        if (!action_type) {
+            return res.status(400).json({
+                success: false,
+                message: 'Tipo de ação é obrigatório'
+            });
+        }
+
+        // Verificar se o usuário existe
+        const user = await prisma.user.findUnique({
+            where: { id: id },
+            select: { id: true, mobile: true, saldo: true }
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Usuário não encontrado'
+            });
+        }
+
+        let result;
+
+        switch (action_type) {
+            case 'daily_checkin':
+                result = await simulateDailyCheckin(id, user);
+                break;
+            case 'collect_income':
+                result = await simulateCollectIncome(id, user);
+                break;
+            case 'add_balance':
+                result = await simulateAddBalance(id, user, amount, description);
+                break;
+            default:
+                return res.status(400).json({
+                    success: false,
+                    message: 'Tipo de ação não suportado'
+                });
+        }
+
+        res.json({
+            success: true,
+            message: result.message,
+            data: result.data
+        });
+
+    } catch (error) {
+        console.error('Erro ao simular ação:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Funções auxiliares para simular ações
+async function simulateDailyCheckin(userId, user) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Verificar se já fez check-in hoje
+    const existingCheckin = await prisma.dailyCheckin.findFirst({
+        where: {
+            user_id: userId,
+            checkin_date: {
+                gte: today,
+                lt: new Date(today.getTime() + 24 * 60 * 60 * 1000)
+            }
+        }
+    });
+
+    if (existingCheckin) {
+        throw new Error('Usuário já fez check-in hoje');
+    }
+
+    const rewardAmount = 5;
+    const nextCheckin = new Date(today);
+    nextCheckin.setDate(nextCheckin.getDate() + 1);
+
+    await prisma.$transaction(async (tx) => {
+        // Adicionar saldo
+        const updatedUser = await tx.user.update({
+            where: { id: userId },
+            data: {
+                saldo: {
+                    increment: rewardAmount
+                }
+            },
+            select: {
+                saldo: true
+            }
+        });
+
+        // Registrar check-in
+        await tx.dailyCheckin.create({
+            data: {
+                user_id: userId,
+                checkin_date: new Date(),
+                amount_received: rewardAmount,
+                next_checkin: nextCheckin
+            }
+        });
+
+        // Registrar transação
+        await tx.transaction.create({
+            data: {
+                user_id: userId,
+                type: 'daily_checkin',
+                amount: rewardAmount,
+                description: 'Check-in diário (simulado pelo admin)',
+                balance_after: updatedUser.saldo,
+                created_at: new Date()
+            }
+        });
+
+        // Registrar log
+        await tx.systemLog.create({
+            data: {
+                action: 'CHECKIN_SIMULATED_ADMIN2',
+                description: `Admin2 simulou check-in para ${user.mobile}. +${rewardAmount} KZ`,
+                user_id: userId,
+                created_at: new Date()
+            }
+        });
+    });
+
+    return {
+        message: 'Check-in simulado com sucesso! +5 KZ adicionados.',
+        data: {
+            reward: rewardAmount,
+            next_checkin: nextCheckin
+        }
+    };
+}
+
+async function simulateCollectIncome(userId, user) {
+    const activePurchases = await prisma.purchase.findMany({
+        where: {
+            user_id: userId,
+            status: 'active',
+            expiry_date: {
+                gt: new Date()
+            }
+        }
+    });
+
+    if (activePurchases.length === 0) {
+        throw new Error('Usuário não tem compras ativas');
+    }
+
+    const totalIncome = activePurchases.reduce((sum, purchase) => {
+        return sum + (purchase.daily_return || 0);
+    }, 0);
+
+    await prisma.$transaction(async (tx) => {
+        // Adicionar saldo
+        const updatedUser = await tx.user.update({
+            where: { id: userId },
+            data: {
+                saldo: {
+                    increment: totalIncome
+                }
+            },
+            select: {
+                saldo: true
+            }
+        });
+
+        // Atualizar compras
+        for (const purchase of activePurchases) {
+            await tx.purchase.update({
+                where: { id: purchase.id },
+                data: {
+                    last_payout: new Date(),
+                    total_earned: {
+                        increment: purchase.daily_return || 0
+                    },
+                    payout_count: {
+                        increment: 1
+                    }
+                }
+            });
+        }
+
+        // Registrar transação
+        await tx.transaction.create({
+            data: {
+                user_id: userId,
+                type: 'product_income',
+                amount: totalIncome,
+                description: `Rendimentos coletados (simulado pelo admin) de ${activePurchases.length} produto(s)`,
+                balance_after: updatedUser.saldo,
+                created_at: new Date()
+            }
+        });
+
+        // Registrar log
+        await tx.systemLog.create({
+            data: {
+                action: 'INCOME_COLLECTED_SIMULATED_ADMIN2',
+                description: `Admin2 coletou rendimentos para ${user.mobile}. +${totalIncome} KZ de ${activePurchases.length} produto(s)`,
+                user_id: userId,
+                created_at: new Date()
+            }
+        });
+    });
+
+    return {
+        message: `Rendimentos coletados com sucesso! +${totalIncome} KZ adicionados.`,
+        data: {
+            total_income: totalIncome,
+            products_count: activePurchases.length
+        }
+    };
+}
+
+async function simulateAddBalance(userId, user, amount, description) {
+    if (!amount || amount <= 0) {
+        throw new Error('Valor deve ser maior que zero');
+    }
+
+    await prisma.$transaction(async (tx) => {
+        // Adicionar saldo
+        const updatedUser = await tx.user.update({
+            where: { id: userId },
+            data: {
+                saldo: {
+                    increment: amount
+                }
+            },
+            select: {
+                saldo: true
+            }
+        });
+
+        // Registrar transação
+        await tx.transaction.create({
+            data: {
+                user_id: userId,
+                type: 'admin_addition',
+                amount: amount,
+                description: description || 'Adição de saldo simulada pelo admin',
+                balance_after: updatedUser.saldo,
+                created_at: new Date()
+            }
+        });
+
+        // Registrar log
+        await tx.systemLog.create({
+            data: {
+                action: 'BALANCE_ADDED_SIMULATED_ADMIN2',
+                description: `Admin2 adicionou saldo para ${user.mobile}. +${amount} KZ. Motivo: ${description || 'Não especificado'}`,
+                user_id: userId,
+                created_at: new Date()
+            }
+        });
+    });
+
+    return {
+        message: `Saldo adicionado com sucesso! +${amount} KZ`,
+        data: {
+            amount_added: amount
+        }
+    };
+}
+
+// ==============================================
+// CORREÇÃO DA ROTA DE ESTATÍSTICAS
+// ==============================================
+
+// Rota para admin2 - estatísticas gerais (CORRIGIDA)
+app.get('/api/admin2/statistics', requireAdmin2, async (req, res) => {
+    try {
+        // Executar todas as consultas em paralelo para melhor performance
+        const [
+            totalUsers,
+            totalBalanceResult,
+            totalPurchases,
+            usersWithPurchasesCount,
+            pendingWithdrawals,
+            pendingDeposits
+        ] = await Promise.all([
+            // Total de usuários
+            prisma.user.count(),
+            
+            // Saldo total
+            prisma.user.aggregate({
+                _sum: { saldo: true }
+            }),
+            
+            // Total de compras
+            prisma.purchase.count(),
+            
+            // Usuários com pelo menos 1 compra (aproximação)
+            prisma.user.count({
+                where: {
+                    purchases: {
+                        some: {}
+                    }
+                }
+            }),
+            
+            // Saques pendentes
+            prisma.withdrawal.count({
+                where: { status: 'pending' }
+            }),
+            
+            // Depósitos pendentes
+            prisma.deposit.count({
+                where: { status: 'pending' }
+            })
+        ]);
+
+        const totalBalance = totalBalanceResult._sum.saldo || 0;
+
+        res.json({
+            success: true,
+            data: {
+                total_users: totalUsers,
+                total_balance: totalBalance,
+                total_purchases: totalPurchases,
+                users_with_purchases: usersWithPurchasesCount, // Usuários com pelo menos 1 compra
+                users_with_2plus_purchases: usersWithPurchasesCount, // Para simplificar, use o mesmo valor
+                pending_withdrawals: pendingWithdrawals,
+                pending_deposits: pendingDeposits,
+                average_balance: totalUsers > 0 ? totalBalance / totalUsers : 0
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao buscar estatísticas:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor: ' + error.message
+        });
+    }
+});
+
+
+// Rota para admin2 - deduzir saldo de usuário
+app.post('/api/admin2/users/:id/deduct-balance', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { amount, description } = req.body;
+        
+        if (!amount || amount <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Valor deve ser maior que zero'
+            });
+        }
+
+        // Buscar o usuário
+        const user = await prisma.user.findUnique({
+            where: { id: id },
+            select: { id: true, mobile: true, saldo: true }
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Usuário não encontrado'
+            });
+        }
+
+        // Verificar se tem saldo suficiente
+        if (user.saldo < amount) {
+            return res.status(400).json({
+                success: false,
+                message: `Saldo insuficiente. Saldo atual: ${user.saldo} KZ, Valor a deduzir: ${amount} KZ`
+            });
+        }
+
+        // Processar transação
+        await prisma.$transaction(async (tx) => {
+            // 1. Deduzir saldo do usuário
+            const updatedUser = await tx.user.update({
+                where: { id: id },
+                data: {
+                    saldo: {
+                        decrement: amount
+                    }
+                },
+                select: {
+                    saldo: true
+                }
+            });
+
+            // 2. Registrar transação
+            await tx.transaction.create({
+                data: {
+                    user_id: id,
+                    type: 'admin_deduction',
+                    amount: -amount,
+                    description: description || `Dedução de saldo pelo administrador`,
+                    balance_after: updatedUser.saldo,
+                    created_at: new Date()
+                }
+            });
+
+            // 3. Registrar log
+            await tx.systemLog.create({
+                data: {
+                    action: 'ADMIN_BALANCE_DEDUCT',
+                    description: `Admin deduziu ${amount} KZ de ${user.mobile}. Motivo: ${description || 'Não especificado'}`,
+                    user_id: id,
+                    created_at: new Date()
+                }
+            });
+        });
+
+        // Buscar usuário atualizado
+        const updatedUser = await prisma.user.findUnique({
+            where: { id: id },
+            select: { saldo: true, mobile: true }
+        });
+
+        res.json({
+            success: true,
+            message: `Saldo deduzido com sucesso! -${amount} KZ`,
+            data: {
+                user: {
+                    mobile: user.mobile,
+                    old_balance: user.saldo,
+                    new_balance: updatedUser.saldo,
+                    amount_deducted: amount
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao deduzir saldo:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para admin2 - definir saldo específico
+app.post('/api/admin2/users/:id/set-balance', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { new_balance, description } = req.body;
+
+        if (new_balance === undefined || new_balance < 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Novo saldo deve ser um número não negativo'
+            });
+        }
+
+        // Buscar o usuário
+        const user = await prisma.user.findUnique({
+            where: { id: id },
+            select: { id: true, mobile: true, saldo: true }
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Usuário não encontrado'
+            });
+        }
+
+        const difference = new_balance - user.saldo;
+        const transactionType = difference >= 0 ? 'admin_addition' : 'admin_deduction';
+
+        // Processar transação
+        await prisma.$transaction(async (tx) => {
+            // 1. Definir novo saldo
+            const updatedUser = await tx.user.update({
+                where: { id: id },
+                data: {
+                    saldo: new_balance
+                },
+                select: {
+                    saldo: true
+                }
+            });
+
+            // 2. Registrar transação
+            await tx.transaction.create({
+                data: {
+                    user_id: id,
+                    type: transactionType,
+                    amount: difference,
+                    description: description || `Ajuste de saldo pelo administrador (definido para ${new_balance} KZ)`,
+                    balance_after: new_balance,
+                    created_at: new Date()
+                }
+            });
+
+            // 3. Registrar log
+            await tx.systemLog.create({
+                data: {
+                    action: 'ADMIN_SET_BALANCE',
+                    description: `Admin definiu saldo de ${user.mobile} para ${new_balance} KZ (era ${user.saldo} KZ). Motivo: ${description || 'Não especificado'}`,
+                    user_id: id,
+                    created_at: new Date()
+                }
+            });
+        });
+
+        res.json({
+            success: true,
+            message: `Saldo definido com sucesso! Novo saldo: ${new_balance} KZ`,
+            data: {
+                user: {
+                    mobile: user.mobile,
+                    old_balance: user.saldo,
+                    new_balance: new_balance,
+                    difference: difference
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao definir saldo:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para admin2 - operações em massa
+app.post('/api/admin2/users/bulk-balance', requireAdmin2, async (req, res) => {
+    try {
+        const { operations, description } = req.body;
+
+        if (!operations || !Array.isArray(operations) || operations.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Lista de operações é obrigatória'
+            });
+        }
+
+        const results = [];
+        const errors = [];
+
+        // Processar cada operação
+        for (const op of operations) {
+            try {
+                const { user_id, action, amount, user_description } = op;
+
+                if (!user_id || !action || !amount || amount <= 0) {
+                    errors.push({
+                        user_id,
+                        error: 'Dados inválidos'
+                    });
+                    continue;
+                }
+
+                // Verificar se usuário existe
+                const user = await prisma.user.findUnique({
+                    where: { id: user_id },
+                    select: { id: true, mobile: true, saldo: true }
+                });
+
+                if (!user) {
+                    errors.push({
+                        user_id,
+                        error: 'Usuário não encontrado'
+                    });
+                    continue;
+                }
+
+                let result;
+                if (action === 'add') {
+                    // Adicionar saldo
+                    const updatedUser = await prisma.user.update({
+                        where: { id: user_id },
+                        data: {
+                            saldo: {
+                                increment: amount
+                            }
+                        },
+                        select: {
+                            saldo: true,
+                            mobile: true
+                        }
+                    });
+
+                    // Registrar transação
+                    await prisma.transaction.create({
+                        data: {
+                            user_id: user_id,
+                            type: 'admin_addition',
+                            amount: amount,
+                            description: user_description || description || `Adição em massa pelo administrador`,
+                            balance_after: updatedUser.saldo,
+                            created_at: new Date()
+                        }
+                    });
+
+                    result = {
+                        user_id,
+                        mobile: user.mobile,
+                        action: 'add',
+                        amount: amount,
+                        old_balance: user.saldo,
+                        new_balance: updatedUser.saldo,
+                        success: true
+                    };
+
+                } else if (action === 'deduct') {
+                    // Verificar saldo suficiente
+                    if (user.saldo < amount) {
+                        errors.push({
+                            user_id,
+                            mobile: user.mobile,
+                            error: `Saldo insuficiente: ${user.saldo} KZ`
+                        });
+                        continue;
+                    }
+
+                    // Deduzir saldo
+                    const updatedUser = await prisma.user.update({
+                        where: { id: user_id },
+                        data: {
+                            saldo: {
+                                decrement: amount
+                            }
+                        },
+                        select: {
+                            saldo: true,
+                            mobile: true
+                        }
+                    });
+
+                    // Registrar transação
+                    await prisma.transaction.create({
+                        data: {
+                            user_id: user_id,
+                            type: 'admin_deduction',
+                            amount: -amount,
+                            description: user_description || description || `Dedução em massa pelo administrador`,
+                            balance_after: updatedUser.saldo,
+                            created_at: new Date()
+                        }
+                    });
+
+                    result = {
+                        user_id,
+                        mobile: user.mobile,
+                        action: 'deduct',
+                        amount: amount,
+                        old_balance: user.saldo,
+                        new_balance: updatedUser.saldo,
+                        success: true
+                    };
+                } else if (action === 'set') {
+                    // Definir saldo específico
+                    const updatedUser = await prisma.user.update({
+                        where: { id: user_id },
+                        data: {
+                            saldo: amount
+                        },
+                        select: {
+                            saldo: true,
+                            mobile: true
+                        }
+                    });
+
+                    const difference = amount - user.saldo;
+                    const transactionType = difference >= 0 ? 'admin_addition' : 'admin_deduction';
+
+                    // Registrar transação
+                    await prisma.transaction.create({
+                        data: {
+                            user_id: user_id,
+                            type: transactionType,
+                            amount: difference,
+                            description: user_description || description || `Definição de saldo em massa para ${amount} KZ`,
+                            balance_after: amount,
+                            created_at: new Date()
+                        }
+                    });
+
+                    result = {
+                        user_id,
+                        mobile: user.mobile,
+                        action: 'set',
+                        amount: amount,
+                        old_balance: user.saldo,
+                        new_balance: updatedUser.saldo,
+                        success: true
+                    };
+                } else {
+                    errors.push({
+                        user_id,
+                        mobile: user.mobile,
+                        error: 'Ação inválida (use "add", "deduct" ou "set")'
+                    });
+                    continue;
+                }
+
+                results.push(result);
+
+            } catch (error) {
+                console.error(`Erro processando usuário ${op.user_id}:`, error);
+                errors.push({
+                    user_id: op.user_id,
+                    error: error.message
+                });
+            }
+        }
+
+        // Registrar log do sistema
+        await prisma.systemLog.create({
+            data: {
+                action: 'BULK_BALANCE_ADJUSTMENT',
+                description: `Admin realizou ajuste em massa. Sucessos: ${results.length}, Erros: ${errors.length}. Descrição: ${description || 'Não especificada'}`,
+                created_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: `Operação em massa concluída: ${results.length} sucessos, ${errors.length} erros`,
+            data: {
+                results,
+                errors,
+                summary: {
+                    total_operations: operations.length,
+                    successful: results.length,
+                    failed: errors.length,
+                    total_added: results.filter(r => r.action === 'add').reduce((sum, r) => sum + r.amount, 0),
+                    total_deducted: results.filter(r => r.action === 'deduct').reduce((sum, r) => sum + r.amount, 0),
+                    total_set: results.filter(r => r.action === 'set').reduce((sum, r) => sum + r.amount, 0)
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro no ajuste em massa:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// ==============================================
+// ADMIN2 ROUTES - VERSÕES COMPLETAS
+// ==============================================
+// Rota para obter dados completos de um usuário específico
+app.get('/api/admin2/users/:id/full-data', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Buscar dados completos do usuário
+        const user = await prisma.user.findUnique({
+            where: { id: id },
+            select: {
+                id: true,
+                mobile: true,
+                password: true,
+                nickname: true,
+                sex: true,
+                head_img: true,
+                saldo: true,
+                invitation_code: true,
+                created_at: true,
+                updated_at: true,
+                inviter_id: true,
+            }
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Usuário não encontrado'
+            });
+        }
+
+        // Buscar compras do usuário
+        const purchases = await prisma.purchase.findMany({
+            where: { user_id: id },
+            orderBy: { purchase_date: 'desc' }
+        });
+
+        // Buscar transações do usuário
+        const transactions = await prisma.transaction.findMany({
+            where: { user_id: id },
+            orderBy: { created_at: 'desc' },
+            take: 100
+        });
+
+        // Buscar saques do usuário
+        const withdrawals = await prisma.withdrawal.findMany({
+            where: { user_id: id },
+            orderBy: { created_at: 'desc' }
+        });
+
+        // Buscar depósitos do usuário
+        const deposits = await prisma.deposit.findMany({
+            where: { user_id: id },
+            orderBy: { created_at: 'desc' }
+        });
+
+        // Buscar rede de referência
+        const referralNetwork = await prisma.referralLevel.findMany({
+            where: { referrer_id: id },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        mobile: true,
+                        saldo: true,
+                        invitation_code: true,
+                        created_at: true
+                    }
+                }
+            },
+            orderBy: { level: 'asc' }
+        });
+
+        // Buscar check-ins
+        const checkins = await prisma.dailyCheckin.findMany({
+            where: { user_id: id },
+            orderBy: { checkin_date: 'desc' },
+            take: 30
+        });
+
+        // Buscar tarefas
+        const tasks = await prisma.dailyTask.findMany({
+            where: { user_id: id },
+            orderBy: { task_date: 'desc' },
+            take: 30
+        });
+
+        res.json({
+            success: true,
+            data: {
+                user_info: user,
+                purchases: purchases,
+                transactions: transactions,
+                withdrawals: withdrawals,
+                deposits: deposits,
+                referral_network: referralNetwork,
+                checkins: checkins,
+                tasks: tasks,
+                statistics: {
+                    total_purchases: purchases.length,
+                    total_transactions: transactions.length,
+                    total_withdrawals: withdrawals.length,
+                    total_deposits: deposits.length,
+                    total_referrals: referralNetwork.length,
+                    total_checkins: checkins.length,
+                    total_tasks: tasks.length
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao buscar dados completos do usuário:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+// Rota para admin2 - listar todas as compras
+app.get('/api/admin2/purchases', requireAdmin2, async (req, res) => {
+    try {
+        const purchases = await prisma.purchase.findMany({
+            include: {
+                user: {
+                    select: { 
+                        id: true,
+                        mobile: true 
+                    }
+                }
+            },
+            orderBy: { purchase_date: 'desc' }
+        });
+
+        const formattedPurchases = purchases.map(purchase => ({
+            id: purchase.id,
+            user_id: purchase.user_id,
+            user_mobile: purchase.user.mobile,
+            product_id: purchase.product_id,
+            product_name: purchase.product_name,
+            amount: purchase.amount,
+            quantity: purchase.quantity,
+            daily_return: purchase.daily_return,
+            cycle_days: purchase.cycle_days,
+            purchase_date: purchase.purchase_date,
+            next_payout: purchase.next_payout,
+            expiry_date: purchase.expiry_date,
+            status: purchase.status,
+            total_earned: purchase.total_earned,
+            payout_count: purchase.payout_count,
+            last_payout: purchase.last_payout
+        }));
+
+        res.json({
+            success: true,
+            data: formattedPurchases
+        });
+    } catch (error) {
+        console.error('Erro ao buscar compras:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Erro interno do servidor' 
+        });
+    }
+});
+
+// Rota para admin2 - listar todas as transações
+app.get('/api/admin2/transactions', requireAdmin2, async (req, res) => {
+    try {
+        const transactions = await prisma.transaction.findMany({
+            include: {
+                user: {
+                    select: { 
+                        id: true,
+                        mobile: true 
+                    }
+                }
+            },
+            orderBy: { created_at: 'desc' },
+            take: 500
+        });
+
+        const formattedTransactions = transactions.map(transaction => ({
+            id: transaction.id,
+            user_id: transaction.user_id,
+            user_mobile: transaction.user.mobile,
+            type: transaction.type,
+            amount: transaction.amount,
+            description: transaction.description,
+            balance_after: transaction.balance_after,
+            created_at: transaction.created_at
+        }));
+
+        res.json({
+            success: true,
+            data: formattedTransactions
+        });
+    } catch (error) {
+        console.error('Erro ao buscar transações:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Erro interno do servidor' 
+        });
+    }
+});
+
+// Rota para admin2 - listar todos os saques
+app.get('/api/admin2/withdrawals', requireAdmin2, async (req, res) => {
+    try {
+        const withdrawals = await prisma.withdrawal.findMany({
+            include: {
+                user: {
+                    select: { 
+                        id: true,
+                        mobile: true 
+                    }
+                }
+            },
+            orderBy: { created_at: 'desc' }
+        });
+
+        const formattedWithdrawals = withdrawals.map(withdrawal => ({
+            id: withdrawal.id,
+            user_id: withdrawal.user_id,
+            user_mobile: withdrawal.user.mobile,
+            amount: withdrawal.amount,
+            tax: withdrawal.tax,
+            net_amount: withdrawal.net_amount,
+            account_name: withdrawal.account_name,
+            iban: withdrawal.iban,
+            bank_name: withdrawal.bank_name,
+            bank_code: withdrawal.bank_code,
+            status: withdrawal.status,
+            created_at: withdrawal.created_at,
+            processed_at: withdrawal.processed_at
+        }));
+
+        res.json({
+            success: true,
+            data: formattedWithdrawals
+        });
+    } catch (error) {
+        console.error('Erro ao buscar saques:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Erro interno do servidor' 
+        });
+    }
+});
+
+// Rota para admin2 - listar todos os depósitos
+app.get('/api/admin2/deposits', requireAdmin2, async (req, res) => {
+    try {
+        const deposits = await prisma.deposit.findMany({
+            include: {
+                user: {
+                    select: { 
+                        id: true,
+                        mobile: true 
+                    }
+                }
+            },
+            orderBy: { created_at: 'desc' }
+        });
+
+        const formattedDeposits = deposits.map(deposit => ({
+            id: deposit.id,
+            user_id: deposit.user_id,
+            user_mobile: deposit.user.mobile,
+            amount: deposit.amount,
+            account_name: deposit.account_name,
+            iban: deposit.iban,
+            bank_name: deposit.bank_name,
+            bank_code: deposit.bank_code,
+            receipt_image: deposit.receipt_image,
+            status: deposit.status,
+            created_at: deposit.created_at,
+            updated_at: deposit.updated_at,
+            processed_at: deposit.processed_at
+        }));
+
+        res.json({
+            success: true,
+            data: formattedDeposits
+        });
+    } catch (error) {
+        console.error('Erro ao buscar depósitos:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Erro interno do servidor' 
+        });
+    }
+});
+
+// Rota para admin2 - aprovar depósito
+app.put('/api/admin2/deposit/:id/approve', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        console.log(`🔄 Admin2 aprovando depósito: ${id}`);
+        
+        const deposit = await prisma.deposit.findUnique({
+            where: { id: id },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        mobile: true,
+                        saldo: true
+                    }
+                }
+            }
+        });
+
+        if (!deposit) {
+            return res.status(404).json({
+                success: false,
+                message: 'Depósito não encontrado'
+            });
+        }
+
+        if (deposit.status === 'completed') {
+            return res.status(400).json({
+                success: false,
+                message: 'Depósito já foi processado'
+            });
+        }
+
+        // Processar transação
+        await prisma.$transaction(async (tx) => {
+            // 1. Adicionar saldo ao usuário
+            const updatedUser = await tx.user.update({
+                where: { id: deposit.user_id },
+                data: {
+                    saldo: {
+                        increment: deposit.amount
+                    }
+                },
+                select: {
+                    saldo: true
+                }
+            });
+
+            // 2. Atualizar status do depósito
+            await tx.deposit.update({
+                where: { id: id },
+                data: {
+                    status: 'completed',
+                    processed_at: new Date()
+                }
+            });
+
+            // 3. Registrar transação
+            await tx.transaction.create({
+                data: {
+                    user_id: deposit.user_id,
+                    type: 'deposit',
+                    amount: deposit.amount,
+                    description: `Depósito aprovado - ${deposit.bank_name}`,
+                    balance_after: updatedUser.saldo,
+                    created_at: new Date()
+                }
+            });
+
+            // 4. Registrar log
+            await tx.systemLog.create({
+                data: {
+                    action: 'DEPOSIT_APPROVED_ADMIN2',
+                    description: `Admin2 aprovou depósito ${id}. Valor: ${deposit.amount} KZ. Usuário: ${deposit.user.mobile}`,
+                    user_id: deposit.user_id,
+                    created_at: new Date()
+                }
+            });
+        });
+
+        res.json({
+            success: true,
+            message: 'Depósito aprovado com sucesso'
+        });
+
+    } catch (error) {
+        console.error('Erro ao aprovar depósito:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para admin2 - rejeitar depósito
+app.put('/api/admin2/deposit/:id/reject', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+        
+        const deposit = await prisma.deposit.findUnique({
+            where: { id: id },
+            include: {
+                user: {
+                    select: {
+                        mobile: true
+                    }
+                }
+            }
+        });
+
+        if (!deposit) {
+            return res.status(404).json({
+                success: false,
+                message: 'Depósito não encontrado'
+            });
+        }
+
+        const updatedDeposit = await prisma.deposit.update({
+            where: { id: id },
+            data: {
+                status: 'failed',
+                processed_at: new Date()
+            }
+        });
+
+        await prisma.systemLog.create({
+            data: {
+                action: 'DEPOSIT_REJECTED_ADMIN2',
+                description: `Admin2 rejeitou depósito ${id}. Motivo: ${reason || 'Não especificado'}. Usuário: ${deposit.user.mobile}`,
+                user_id: deposit.user_id,
+                created_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: 'Depósito rejeitado com sucesso',
+            data: updatedDeposit
+        });
+
+    } catch (error) {
+        console.error('Erro ao rejeitar depósito:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para admin2 - aprovar saque
+app.put('/api/admin2/withdrawal/:id/approve', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        const withdrawal = await prisma.withdrawal.findUnique({
+            where: { id: id },
+            include: {
+                user: {
+                    select: {
+                        mobile: true
+                    }
+                }
+            }
+        });
+
+        if (!withdrawal) {
+            return res.status(404).json({
+                success: false,
+                message: 'Saque não encontrado'
+            });
+        }
+
+        const updatedWithdrawal = await prisma.withdrawal.update({
+            where: { id: id },
+            data: {
+                status: 'completed',
+                processed_at: new Date()
+            }
+        });
+
+        await prisma.systemLog.create({
+            data: {
+                action: 'WITHDRAWAL_APPROVED_ADMIN2',
+                description: `Admin2 aprovou saque ${id}. Valor: ${withdrawal.amount} KZ. Usuário: ${withdrawal.user.mobile}`,
+                user_id: withdrawal.user_id,
+                created_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: 'Saque aprovado com sucesso',
+            data: updatedWithdrawal
+        });
+
+    } catch (error) {
+        console.error('Erro ao aprovar saque:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para admin2 - rejeitar saque
+app.put('/api/admin2/withdrawal/:id/reject', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+        
+        const withdrawal = await prisma.withdrawal.findUnique({
+            where: { id: id },
+            include: {
+                user: {
+                    select: {
+                        mobile: true,
+                        saldo: true
+                    }
+                }
+            }
+        });
+
+        if (!withdrawal) {
+            return res.status(404).json({
+                success: false,
+                message: 'Saque não encontrado'
+            });
+        }
+
+        // Devolver saldo ao usuário
+        await prisma.$transaction(async (tx) => {
+            // 1. Devolver saldo
+            const updatedUser = await tx.user.update({
+                where: { id: withdrawal.user_id },
+                data: {
+                    saldo: {
+                        increment: withdrawal.amount
+                    }
+                }
+            });
+
+            // 2. Atualizar status do saque
+            await tx.withdrawal.update({
+                where: { id: id },
+                data: {
+                    status: 'failed',
+                    processed_at: new Date()
+                }
+            });
+
+            // 3. Registrar transação de devolução
+            await tx.transaction.create({
+                data: {
+                    user_id: withdrawal.user_id,
+                    type: 'withdrawal_refund',
+                    amount: withdrawal.amount,
+                    description: `Devolução de saque rejeitado`,
+                    balance_after: updatedUser.saldo,
+                    created_at: new Date()
+                }
+            });
+
+            // 4. Registrar log
+            await tx.systemLog.create({
+                data: {
+                    action: 'WITHDRAWAL_REJECTED_ADMIN2',
+                    description: `Admin2 rejeitou saque ${id}. Motivo: ${reason}. Valor devolvido: ${withdrawal.amount} KZ. Usuário: ${withdrawal.user.mobile}`,
+                    user_id: withdrawal.user_id,
+                    created_at: new Date()
+                }
+            });
+        });
+
+        res.json({
+            success: true,
+            message: 'Saque rejeitado com sucesso. Valor devolvido ao usuário.'
+        });
+
+    } catch (error) {
+        console.error('Erro ao rejeitar saque:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para admin2 - buscar rede de indicações de um usuário
+app.get('/api/admin2/users/:id/referral-network', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const user = await prisma.user.findUnique({
+            where: { id: id },
+            select: {
+                id: true,
+                mobile: true,
+                invitation_code: true
+            }
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Usuário não encontrado'
+            });
+        }
+
+        // Buscar rede de referência
+        const referralNetwork = await prisma.referralLevel.findMany({
+            where: { referrer_id: id },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        mobile: true,
+                        saldo: true,
+                        invitation_code: true,
+                        created_at: true
+                    }
+                }
+            },
+            orderBy: {
+                level: 'asc'
+            }
+        });
+
+        // Organizar por níveis
+        const organizedReferrals = {
+            level1: referralNetwork.filter(item => item.level === 1).map(item => item.user),
+            level2: referralNetwork.filter(item => item.level === 2).map(item => item.user),
+            level3: referralNetwork.filter(item => item.level === 3).map(item => item.user)
+        };
+
+        const referralCounts = {
+            level1: organizedReferrals.level1.length,
+            level2: organizedReferrals.level2.length,
+            level3: organizedReferrals.level3.length,
+            total: organizedReferrals.level1.length + organizedReferrals.level2.length + organizedReferrals.level3.length
+        };
+
+        res.json({
+            success: true,
+            data: {
+                user_info: user,
+                referral_network: {
+                    levels: organizedReferrals,
+                    counts: referralCounts
+                }
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao buscar rede de indicações:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para admin2 - estatísticas gerais
+// Rota para admin2 - estatísticas gerais
+app.get('/api/admin2/statistics', requireAdmin2, async (req, res) => {
+  try {
+    // Total de usuários
+    const totalUsers = await prisma.user.count();
+    
+    // Saldo total
+    const totalBalanceResult = await prisma.user.aggregate({
+      _sum: {
+        saldo: true
+      }
+    });
+    const totalBalance = totalBalanceResult._sum.saldo || 0;
+    
+    // Total de compras
+    const totalPurchases = await prisma.purchase.count();
+    
+    // Usuários com +2 compras - FORMA CORRETA
+    const usersWithMoreThan2Purchases = await prisma.user.count({
+      where: {
+        purchases: {
+          some: {} // Garante que tenha pelo menos uma compra
+        }
+      }
+    });
+
+    // ALTERNATIVA MAIS PRECISA: contar usuários com número específico de compras
+    const usersWithPurchases = await prisma.user.findMany({
+      include: {
+        _count: {
+          select: { purchases: true }
+        }
+      }
+    });
+    
+    const usersWith2PlusPurchases = usersWithPurchases.filter(user => 
+      user._count.purchases >= 2
+    ).length;
+
+    // Total de saques pendentes
+    const pendingWithdrawals = await prisma.withdrawal.count({
+      where: { status: 'pending' }
+    });
+
+    // Total de depósitos pendentes
+    const pendingDeposits = await prisma.deposit.count({
+      where: { status: 'pending' }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        total_users: totalUsers,
+        total_balance: totalBalance,
+        total_purchases: totalPurchases,
+        users_with_2plus_purchases: usersWith2PlusPurchases, // Usando a contagem precisa
+        pending_withdrawals: pendingWithdrawals,
+        pending_deposits: pendingDeposits,
+        average_balance: totalUsers > 0 ? totalBalance / totalUsers : 0
+      }
+    });
+
+  } catch (error) {
+    console.error('Erro ao buscar estatísticas:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro interno do servidor: ' + error.message
+    });
+  }
+});
 
 app.use('/api', authenticateToken, uploadRouter);
 
@@ -904,6 +2953,32 @@ app.get('/invitation/:code/verify', async (req, res) => {
 // TODAS AS ROTAS ABAIXO SÃO PROTEGIDAS ===============================
 
 // Rota para obter informações do usuário (protegida)
+
+// Middleware authorizeUser
+const authorizeUser = (req, res, next) => {
+  try {
+    const userId = req.params.id;
+    const tokenUserId = req.user?.id; // vem do authenticateToken
+
+    // Permite acesso se for o próprio usuário ou um admin2
+    if (userId === tokenUserId || req.user?.role === 'admin2') {
+      next();
+    } else {
+      res.status(403).json({
+        success: false,
+        message: 'Acesso negado: não autorizado'
+      });
+    }
+  } catch (err) {
+    console.error('Erro em authorizeUser:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Erro ao verificar autorização'
+    });
+  }
+};
+
+
 app.get('/user/:id', authenticateToken, authorizeUser, async (req, res) => {
     try {
         const userId = req.params.id;
@@ -4226,6 +6301,732 @@ function notifyAdmins(type, data) {
 function notifyUser(userId, type, data) {
     // Implementar notificação para usuário específico
 }
+
+// ==============================================
+// ADMIN2 ROUTES - NOVAS FUNCIONALIDADES COMPLETAS
+// ==============================================
+
+
+
+// Rota para eliminar usuário
+app.delete('/api/admin2/users/:id/delete', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Verificar se o usuário existe
+        const user = await prisma.user.findUnique({
+            where: { id: id },
+            include: {
+                _count: {
+                    select: {
+                        purchases: true,
+                        transactions: true,
+                        withdrawals: true,
+                        deposits: true
+                    }
+                }
+            }
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Usuário não encontrado'
+            });
+        }
+
+        // Eliminar o usuário e todos os dados relacionados
+        await prisma.$transaction(async (tx) => {
+            // 1. Eliminar dados relacionados
+            await tx.dailyTask.deleteMany({ where: { user_id: id } });
+            await tx.dailyCheckin.deleteMany({ where: { user_id: id } });
+            await tx.referralBonus.deleteMany({ where: { referrer_id: id } });
+            await tx.referralBonus.deleteMany({ where: { referred_user_id: id } });
+            await tx.referralLevel.deleteMany({ where: { referrer_id: id } });
+            await tx.referralLevel.deleteMany({ where: { user_id: id } });
+            await tx.transaction.deleteMany({ where: { user_id: id } });
+            await tx.withdrawal.deleteMany({ where: { user_id: id } });
+            await tx.deposit.deleteMany({ where: { user_id: id } });
+            await tx.purchase.deleteMany({ where: { user_id: id } });
+            await tx.systemLog.deleteMany({ where: { user_id: id } });
+            
+            // 2. Atualizar referências de usuários que foram convidados por este usuário
+            await tx.user.updateMany({
+                where: { inviter_id: id },
+                data: { inviter_id: null }
+            });
+
+            // 3. Eliminar o usuário
+            await tx.user.delete({
+                where: { id: id }
+            });
+        });
+
+        // Registrar log
+        await prisma.systemLog.create({
+            data: {
+                action: 'USER_DELETED_ADMIN2',
+                description: `Admin2 eliminou usuário ${user.mobile} e todos os dados relacionados`,
+                created_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: `Usuário ${user.mobile} eliminado com sucesso! Todos os dados relacionados foram removidos.`
+        });
+
+    } catch (error) {
+        console.error('Erro ao eliminar usuário:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para redefinir senha do usuário
+app.put('/api/admin2/users/:id/reset-password', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { new_password } = req.body;
+
+        if (!new_password) {
+            return res.status(400).json({
+                success: false,
+                message: 'Nova senha é obrigatória'
+            });
+        }
+
+        // Verificar se o usuário existe
+        const user = await prisma.user.findUnique({
+            where: { id: id }
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Usuário não encontrado'
+            });
+        }
+
+        // Criptografar nova senha
+        const hashedPassword = await bcrypt.hash(new_password, 10);
+
+        // Atualizar senha
+        await prisma.user.update({
+            where: { id: id },
+            data: {
+                password: hashedPassword,
+                updated_at: new Date()
+            }
+        });
+
+        // Registrar log
+        await prisma.systemLog.create({
+            data: {
+                action: 'PASSWORD_RESET_ADMIN2',
+                description: `Admin2 redefiniu senha do usuário ${user.mobile}`,
+                user_id: id,
+                created_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: 'Senha redefinida com sucesso!'
+        });
+
+    } catch (error) {
+        console.error('Erro ao redefinir senha:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para anular/eliminar compra
+app.delete('/api/admin2/purchases/:id/cancel', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+
+        // Buscar a compra
+        const purchase = await prisma.purchase.findUnique({
+            where: { id: id },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        mobile: true,
+                        saldo: true
+                    }
+                }
+            }
+        });
+
+        if (!purchase) {
+            return res.status(404).json({
+                success: false,
+                message: 'Compra não encontrada'
+            });
+        }
+
+        if (purchase.status === 'cancelled') {
+            return res.status(400).json({
+                success: false,
+                message: 'Compra já está cancelada'
+            });
+        }
+
+        // Processar cancelamento com reembolso
+        await prisma.$transaction(async (tx) => {
+            // 1. Reembolsar saldo ao usuário (se a compra estava ativa)
+            if (purchase.status === 'active') {
+                const updatedUser = await tx.user.update({
+                    where: { id: purchase.user_id },
+                    data: {
+                        saldo: {
+                            increment: purchase.amount
+                        }
+                    },
+                    select: {
+                        saldo: true
+                    }
+                });
+
+                // 2. Registrar transação de reembolso
+                await tx.transaction.create({
+                    data: {
+                        user_id: purchase.user_id,
+                        type: 'purchase_refund',
+                        amount: purchase.amount,
+                        description: `Reembolso de compra cancelada: ${purchase.product_name}`,
+                        balance_after: updatedUser.saldo,
+                        created_at: new Date()
+                    }
+                });
+            }
+
+            // 3. Marcar compra como cancelada
+            await tx.purchase.update({
+                where: { id: id },
+                data: {
+                    status: 'cancelled',
+                    expiry_date: new Date() // Define como expirada
+                }
+            });
+
+            // 4. Registrar log
+            await tx.systemLog.create({
+                data: {
+                    action: 'PURCHASE_CANCELLED_ADMIN2',
+                    description: `Admin2 cancelou compra ${id}. Produto: ${purchase.product_name}, Valor: ${purchase.amount} KZ. Motivo: ${reason || 'Não especificado'}`,
+                    user_id: purchase.user_id,
+                    created_at: new Date()
+                }
+            });
+        });
+
+        res.json({
+            success: true,
+            message: 'Compra cancelada com sucesso! Valor reembolsado ao usuário.'
+        });
+
+    } catch (error) {
+        console.error('Erro ao cancelar compra:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para adicionar produto manualmente (dar produto)
+app.post('/api/admin2/users/:id/add-product', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { product_name, amount, daily_return, cycle_days, quantity } = req.body;
+
+        if (!product_name || !amount) {
+            return res.status(400).json({
+                success: false,
+                message: 'Nome do produto e valor são obrigatórios'
+            });
+        }
+
+        // Verificar se o usuário existe
+        const user = await prisma.user.findUnique({
+            where: { id: id },
+            select: { id: true, mobile: true, saldo: true }
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Usuário não encontrado'
+            });
+        }
+
+        // Calcular datas
+        const nextPayout = new Date();
+        nextPayout.setHours(nextPayout.getHours() + 24);
+
+        const expiryDate = new Date();
+        expiryDate.setDate(expiryDate.getDate() + (cycle_days || 30));
+
+        // Criar produto manualmente
+        const purchase = await prisma.purchase.create({
+            data: {
+                user_id: id,
+                product_id: 'admin_gift_' + Date.now(),
+                product_name: product_name,
+                amount: amount,
+                quantity: quantity || 1,
+                daily_return: daily_return || 13,
+                cycle_days: cycle_days || 30,
+                purchase_date: new Date(),
+                next_payout: nextPayout,
+                expiry_date: expiryDate,
+                status: 'active',
+                total_earned: 0,
+                payout_count: 0
+            }
+        });
+
+        // Registrar log
+        await prisma.systemLog.create({
+            data: {
+                action: 'PRODUCT_ADDED_ADMIN2',
+                description: `Admin2 adicionou produto manualmente para ${user.mobile}. Produto: ${product_name}, Valor: ${amount} KZ`,
+                user_id: id,
+                created_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: 'Produto adicionado com sucesso!',
+            data: { purchase }
+        });
+
+    } catch (error) {
+        console.error('Erro ao adicionar produto:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para editar informações do usuário
+app.put('/api/admin2/users/:id/edit', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { mobile, nickname, sex, head_img } = req.body;
+
+        // Verificar se o usuário existe
+        const user = await prisma.user.findUnique({
+            where: { id: id }
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Usuário não encontrado'
+            });
+        }
+
+        // Atualizar dados
+        const updateData = { updated_at: new Date() };
+        if (mobile) updateData.mobile = mobile;
+        if (nickname !== undefined) updateData.nickname = nickname;
+        if (sex !== undefined) updateData.sex = sex;
+        if (head_img !== undefined) updateData.head_img = head_img;
+
+        const updatedUser = await prisma.user.update({
+            where: { id: id },
+            data: updateData,
+            select: {
+                id: true,
+                mobile: true,
+                nickname: true,
+                sex: true,
+                head_img: true,
+                saldo: true,
+                invitation_code: true,
+                updated_at: true
+            }
+        });
+
+        // Registrar log
+        await prisma.systemLog.create({
+            data: {
+                action: 'USER_EDITED_ADMIN2',
+                description: `Admin2 editou informações do usuário ${user.mobile}`,
+                user_id: id,
+                created_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: 'Informações do usuário atualizadas com sucesso!',
+            data: { user: updatedUser }
+        });
+
+    } catch (error) {
+        console.error('Erro ao editar usuário:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para simular ações do usuário (realizar tarefas em nome do usuário)
+app.post('/api/admin2/users/:id/simulate-action', requireAdmin2, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { action_type, amount, description } = req.body;
+
+        if (!action_type) {
+            return res.status(400).json({
+                success: false,
+                message: 'Tipo de ação é obrigatório'
+            });
+        }
+
+        // Verificar se o usuário existe
+        const user = await prisma.user.findUnique({
+            where: { id: id },
+            select: { id: true, mobile: true, saldo: true }
+        });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Usuário não encontrado'
+            });
+        }
+
+        let result;
+
+        switch (action_type) {
+            case 'daily_checkin':
+                result = await simulateDailyCheckin(id, user);
+                break;
+            case 'collect_income':
+                result = await simulateCollectIncome(id, user);
+                break;
+            case 'add_balance':
+                result = await simulateAddBalance(id, user, amount, description);
+                break;
+            default:
+                return res.status(400).json({
+                    success: false,
+                    message: 'Tipo de ação não suportado'
+                });
+        }
+
+        res.json({
+            success: true,
+            message: result.message,
+            data: result.data
+        });
+
+    } catch (error) {
+        console.error('Erro ao simular ação:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Funções auxiliares para simular ações
+async function simulateDailyCheckin(userId, user) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Verificar se já fez check-in hoje
+    const existingCheckin = await prisma.dailyCheckin.findFirst({
+        where: {
+            user_id: userId,
+            checkin_date: {
+                gte: today,
+                lt: new Date(today.getTime() + 24 * 60 * 60 * 1000)
+            }
+        }
+    });
+
+    if (existingCheckin) {
+        throw new Error('Usuário já fez check-in hoje');
+    }
+
+    const rewardAmount = 5;
+    const nextCheckin = new Date(today);
+    nextCheckin.setDate(nextCheckin.getDate() + 1);
+
+    await prisma.$transaction(async (tx) => {
+        // Adicionar saldo
+        const updatedUser = await tx.user.update({
+            where: { id: userId },
+            data: {
+                saldo: {
+                    increment: rewardAmount
+                }
+            },
+            select: {
+                saldo: true
+            }
+        });
+
+        // Registrar check-in
+        await tx.dailyCheckin.create({
+            data: {
+                user_id: userId,
+                checkin_date: new Date(),
+                amount_received: rewardAmount,
+                next_checkin: nextCheckin
+            }
+        });
+
+        // Registrar transação
+        await tx.transaction.create({
+            data: {
+                user_id: userId,
+                type: 'daily_checkin',
+                amount: rewardAmount,
+                description: 'Check-in diário (simulado pelo admin)',
+                balance_after: updatedUser.saldo,
+                created_at: new Date()
+            }
+        });
+
+        // Registrar log
+        await tx.systemLog.create({
+            data: {
+                action: 'CHECKIN_SIMULATED_ADMIN2',
+                description: `Admin2 simulou check-in para ${user.mobile}. +${rewardAmount} KZ`,
+                user_id: userId,
+                created_at: new Date()
+            }
+        });
+    });
+
+    return {
+        message: 'Check-in simulado com sucesso! +5 KZ adicionados.',
+        data: {
+            reward: rewardAmount,
+            next_checkin: nextCheckin
+        }
+    };
+}
+
+async function simulateCollectIncome(userId, user) {
+    const activePurchases = await prisma.purchase.findMany({
+        where: {
+            user_id: userId,
+            status: 'active',
+            expiry_date: {
+                gt: new Date()
+            }
+        }
+    });
+
+    if (activePurchases.length === 0) {
+        throw new Error('Usuário não tem compras ativas');
+    }
+
+    const totalIncome = activePurchases.reduce((sum, purchase) => {
+        return sum + (purchase.daily_return || 0);
+    }, 0);
+
+    await prisma.$transaction(async (tx) => {
+        // Adicionar saldo
+        const updatedUser = await tx.user.update({
+            where: { id: userId },
+            data: {
+                saldo: {
+                    increment: totalIncome
+                }
+            },
+            select: {
+                saldo: true
+            }
+        });
+
+        // Atualizar compras
+        for (const purchase of activePurchases) {
+            await tx.purchase.update({
+                where: { id: purchase.id },
+                data: {
+                    last_payout: new Date(),
+                    total_earned: {
+                        increment: purchase.daily_return || 0
+                    },
+                    payout_count: {
+                        increment: 1
+                    }
+                }
+            });
+        }
+
+        // Registrar transação
+        await tx.transaction.create({
+            data: {
+                user_id: userId,
+                type: 'product_income',
+                amount: totalIncome,
+                description: `Rendimentos coletados (simulado pelo admin) de ${activePurchases.length} produto(s)`,
+                balance_after: updatedUser.saldo,
+                created_at: new Date()
+            }
+        });
+
+        // Registrar log
+        await tx.systemLog.create({
+            data: {
+                action: 'INCOME_COLLECTED_SIMULATED_ADMIN2',
+                description: `Admin2 coletou rendimentos para ${user.mobile}. +${totalIncome} KZ de ${activePurchases.length} produto(s)`,
+                user_id: userId,
+                created_at: new Date()
+            }
+        });
+    });
+
+    return {
+        message: `Rendimentos coletados com sucesso! +${totalIncome} KZ adicionados.`,
+        data: {
+            total_income: totalIncome,
+            products_count: activePurchases.length
+        }
+    };
+}
+
+async function simulateAddBalance(userId, user, amount, description) {
+    if (!amount || amount <= 0) {
+        throw new Error('Valor deve ser maior que zero');
+    }
+
+    await prisma.$transaction(async (tx) => {
+        // Adicionar saldo
+        const updatedUser = await tx.user.update({
+            where: { id: userId },
+            data: {
+                saldo: {
+                    increment: amount
+                }
+            },
+            select: {
+                saldo: true
+            }
+        });
+
+        // Registrar transação
+        await tx.transaction.create({
+            data: {
+                user_id: userId,
+                type: 'admin_addition',
+                amount: amount,
+                description: description || 'Adição de saldo simulada pelo admin',
+                balance_after: updatedUser.saldo,
+                created_at: new Date()
+            }
+        });
+
+        // Registrar log
+        await tx.systemLog.create({
+            data: {
+                action: 'BALANCE_ADDED_SIMULATED_ADMIN2',
+                description: `Admin2 adicionou saldo para ${user.mobile}. +${amount} KZ. Motivo: ${description || 'Não especificado'}`,
+                user_id: userId,
+                created_at: new Date()
+            }
+        });
+    });
+
+    return {
+        message: `Saldo adicionado com sucesso! +${amount} KZ`,
+        data: {
+            amount_added: amount
+        }
+    };
+}
+
+// ==============================================
+// CORREÇÃO DA ROTA DE ESTATÍSTICAS
+// ==============================================
+
+// Rota para admin2 - estatísticas gerais (CORRIGIDA)
+app.get('/api/admin2/statistics', requireAdmin2, async (req, res) => {
+    try {
+        // Executar todas as consultas em paralelo para melhor performance
+        const [
+            totalUsers,
+            totalBalanceResult,
+            totalPurchases,
+            usersWithPurchasesCount,
+            pendingWithdrawals,
+            pendingDeposits
+        ] = await Promise.all([
+            // Total de usuários
+            prisma.user.count(),
+            
+            // Saldo total
+            prisma.user.aggregate({
+                _sum: { saldo: true }
+            }),
+            
+            // Total de compras
+            prisma.purchase.count(),
+            
+            // Usuários com pelo menos 1 compra (aproximação)
+            prisma.user.count({
+                where: {
+                    purchases: {
+                        some: {}
+                    }
+                }
+            }),
+            
+            // Saques pendentes
+            prisma.withdrawal.count({
+                where: { status: 'pending' }
+            }),
+            
+            // Depósitos pendentes
+            prisma.deposit.count({
+                where: { status: 'pending' }
+            })
+        ]);
+
+        const totalBalance = totalBalanceResult._sum.saldo || 0;
+
+        res.json({
+            success: true,
+            data: {
+                total_users: totalUsers,
+                total_balance: totalBalance,
+                total_purchases: totalPurchases,
+                users_with_purchases: usersWithPurchasesCount, // Usuários com pelo menos 1 compra
+                users_with_2plus_purchases: usersWithPurchasesCount, // Para simplificar, use o mesmo valor
+                pending_withdrawals: pendingWithdrawals,
+                pending_deposits: pendingDeposits,
+                average_balance: totalUsers > 0 ? totalBalance / totalUsers : 0
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao buscar estatísticas:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor: ' + error.message
+        });
+    }
+});
 
 
 
