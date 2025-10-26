@@ -4563,6 +4563,71 @@ app.get('/api/tasks/status', authenticateToken, async (req, res) => {
     }
 });
 
+// Adicione esta rota ao seu server.js, após as outras rotas protegidas:
+
+// Rota para obter estatísticas do usuário
+app.get('/api/user/statistics', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        
+        // Buscar totais de compras (investimento)
+        const totalInvested = await prisma.purchase.aggregate({
+            where: { user_id: userId },
+            _sum: { amount: true }
+        });
+
+        // Buscar totais de saques
+        const totalWithdrawals = await prisma.withdrawal.aggregate({
+            where: { 
+                user_id: userId,
+                status: 'completed'
+            },
+            _sum: { amount: true }
+        });
+
+        // Buscar rendimentos de hoje
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        const todayIncome = await prisma.transaction.aggregate({
+            where: {
+                user_id: userId,
+                type: 'payout',
+                created_at: {
+                    gte: today
+                }
+            },
+            _sum: { amount: true }
+        });
+
+        // Buscar rendimento total
+        const totalEarnings = await prisma.transaction.aggregate({
+            where: {
+                user_id: userId,
+                type: 'payout'
+            },
+            _sum: { amount: true }
+        });
+
+        res.json({
+            success: true,
+            data: {
+                total_invested: totalInvested._sum.amount || 0,
+                total_withdrawals: totalWithdrawals._sum.amount || 0,
+                today_income: todayIncome._sum.amount || 0,
+                total_earnings: totalEarnings._sum.amount || 0
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao buscar estatísticas:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
 // Rota para realizar check-in diário
 app.post('/api/tasks/daily-checkin', authenticateToken, async (req, res) => {
     try {
@@ -5005,7 +5070,7 @@ app.get('/api/team/statistics', authenticateToken, async (req, res) => {
 
         const responseData = {
             team_overview: {
-                invitation_link: `https://hamister203.com/register?ref=${user.invitation_code}`,
+                invitation_link: `https://ushkk.uk/register?ref=${user.invitation_code}`,
                 people_added: referralCounts.total,
                 income_added: bonusTotals.total
             },
@@ -6955,7 +7020,342 @@ async function simulateAddBalance(userId, user, amount, description) {
         }
     };
 }
+// ==============================================
+// ROTA /iban - Gerenciar conta bancária do usuário
+// ==============================================
 
+// Buscar conta bancária do usuário
+app.get('/iban', authenticateToken, async (req, res) => {
+  try {
+    const account = await prisma.bankAccount.findUnique({
+      where: { user_id: req.user.id }
+    });
+
+    if (!account) {
+      return res.json({
+        success: false,
+        message: 'Nenhuma conta cadastrada.'
+      });
+    }
+
+    res.json({
+      success: true,
+      account
+    });
+  } catch (error) {
+    console.error('Erro ao buscar conta bancária:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro interno ao buscar conta bancária.'
+    });
+  }
+});
+
+// Criar ou atualizar conta bancária
+app.post('/iban', authenticateToken, async (req, res) => {
+  try {
+    const { bank, account_number, account_holder } = req.body;
+
+    if (!bank || !account_number || !account_holder) {
+      return res.status(400).json({
+        success: false,
+        message: 'Preencha todos os campos obrigatórios.'
+      });
+    }
+
+    const existingAccount = await prisma.bankAccount.findUnique({
+      where: { user_id: req.user.id }
+    });
+
+    let account;
+    if (existingAccount) {
+      // Atualiza dados existentes
+      account = await prisma.bankAccount.update({
+        where: { user_id: req.user.id },
+        data: { bank, account_number, account_holder }
+      });
+    } else {
+      // Cria nova conta
+      account = await prisma.bankAccount.create({
+        data: {
+          user_id: req.user.id,
+          bank,
+          account_number,
+          account_holder
+        }
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Conta bancária salva com sucesso!',
+      account
+    });
+  } catch (error) {
+    console.error('Erro ao salvar conta bancária:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erro interno ao salvar conta bancária.'
+    });
+  }
+});
+// ==============================================
+// ROTAS DE CONTA BANCÁRIA (IBAN)
+// ==============================================
+
+// Rota para obter conta bancária do usuário
+app.get('/api/user/bank-account', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        
+        const bankAccount = await prisma.bankAccount.findUnique({
+            where: { user_id: userId },
+            select: {
+                id: true,
+                bank_name: true,
+                account_holder: true,
+                account_number: true,
+                branch_code: true,
+                created_at: true,
+                updated_at: true
+            }
+        });
+
+        res.json({
+            success: true,
+            data: bankAccount || null
+        });
+
+    } catch (error) {
+        console.error('Erro ao buscar conta bancária:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para criar conta bancária
+app.post('/api/user/bank-account', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { bank_name, account_holder, account_number, branch_code } = req.body;
+        
+        // Validar dados
+        if (!bank_name || !account_holder || !account_number || !branch_code) {
+            return res.status(400).json({
+                success: false,
+                message: 'Todos os campos são obrigatórios'
+            });
+        }
+
+        // Verificar se já existe conta bancária para este usuário
+        const existingAccount = await prisma.bankAccount.findUnique({
+            where: { user_id: userId }
+        });
+
+        if (existingAccount) {
+            return res.status(400).json({
+                success: false,
+                message: 'Você já possui uma conta bancária cadastrada. Use a rota de atualização.'
+            });
+        }
+
+        // Criar conta bancária
+        const bankAccount = await prisma.bankAccount.create({
+            data: {
+                user_id: userId,
+                bank_name: bank_name,
+                account_holder: account_holder,
+                account_number: account_number,
+                branch_code: branch_code,
+                created_at: new Date(),
+                updated_at: new Date()
+            },
+            select: {
+                id: true,
+                bank_name: true,
+                account_holder: true,
+                account_number: true,
+                branch_code: true,
+                created_at: true,
+                updated_at: true
+            }
+        });
+
+        // Registrar log
+        await prisma.systemLog.create({
+            data: {
+                action: 'BANK_ACCOUNT_CREATED',
+                description: `Usuário cadastrou conta bancária: ${bank_name} - ${account_number}`,
+                user_id: userId,
+                created_at: new Date()
+            }
+        });
+
+        res.status(201).json({
+            success: true,
+            message: 'Conta bancária cadastrada com sucesso!',
+            data: bankAccount
+        });
+
+    } catch (error) {
+        console.error('Erro ao criar conta bancária:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para atualizar conta bancária
+app.put('/api/user/bank-account', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { bank_name, account_holder, account_number, branch_code } = req.body;
+        
+        // Validar dados
+        if (!bank_name || !account_holder || !account_number || !branch_code) {
+            return res.status(400).json({
+                success: false,
+                message: 'Todos os campos são obrigatórios'
+            });
+        }
+
+        // Verificar se existe conta bancária
+        const existingAccount = await prisma.bankAccount.findUnique({
+            where: { user_id: userId }
+        });
+
+        if (!existingAccount) {
+            return res.status(404).json({
+                success: false,
+                message: 'Conta bancária não encontrada. Use a rota de criação.'
+            });
+        }
+
+        // Atualizar conta bancária
+        const bankAccount = await prisma.bankAccount.update({
+            where: { user_id: userId },
+            data: {
+                bank_name: bank_name,
+                account_holder: account_holder,
+                account_number: account_number,
+                branch_code: branch_code,
+                updated_at: new Date()
+            },
+            select: {
+                id: true,
+                bank_name: true,
+                account_holder: true,
+                account_number: true,
+                branch_code: true,
+                created_at: true,
+                updated_at: true
+            }
+        });
+
+        // Registrar log
+        await prisma.systemLog.create({
+            data: {
+                action: 'BANK_ACCOUNT_UPDATED',
+                description: `Usuário atualizou conta bancária: ${bank_name} - ${account_number}`,
+                user_id: userId,
+                created_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: 'Conta bancária atualizada com sucesso!',
+            data: bankAccount
+        });
+
+    } catch (error) {
+        console.error('Erro ao atualizar conta bancária:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para deletar conta bancária
+app.delete('/api/user/bank-account', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        // Verificar se existe conta bancária
+        const existingAccount = await prisma.bankAccount.findUnique({
+            where: { user_id: userId }
+        });
+
+        if (!existingAccount) {
+            return res.status(404).json({
+                success: false,
+                message: 'Conta bancária não encontrada'
+            });
+        }
+
+        // Deletar conta bancária
+        await prisma.bankAccount.delete({
+            where: { user_id: userId }
+        });
+
+        // Registrar log
+        await prisma.systemLog.create({
+            data: {
+                action: 'BANK_ACCOUNT_DELETED',
+                description: `Usuário deletou conta bancária`,
+                user_id: userId,
+                created_at: new Date()
+            }
+        });
+
+        res.json({
+            success: true,
+            message: 'Conta bancária deletada com sucesso!'
+        });
+
+    } catch (error) {
+        console.error('Erro ao deletar conta bancária:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para verificar se usuário tem conta bancária (para validação de saque)
+app.get('/api/user/bank-account/check', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        
+        const bankAccount = await prisma.bankAccount.findUnique({
+            where: { user_id: userId },
+            select: {
+                id: true,
+                bank_name: true,
+                account_holder: true
+            }
+        });
+
+        res.json({
+            success: true,
+            data: {
+                has_bank_account: !!bankAccount,
+                bank_account: bankAccount
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao verificar conta bancária:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
 // ==============================================
 // CORREÇÃO DA ROTA DE ESTATÍSTICAS
 // ==============================================
