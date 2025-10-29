@@ -2794,7 +2794,6 @@ app.post('/login', async (req, res) => {
 });
 
 // Rota de registro (pública)
-// Rota de registro (pública)
 app.post('/register', async (req, res) => {
     try {
         const { mobile, password, invitation_code, saldo } = req.body;
@@ -3901,7 +3900,7 @@ app.post('/api/purchase', authenticateToken, async (req, res) => {
     }
 });
 
-// FUNÇÃO DISTRIBUTE REFERRAL BONUSES COMPLETAMENTE CORRIGIDA
+// FUNÇÃO DISTRIBUTE REFERRAL BONUSES CORRIGIDA
 async function distributeReferralBonuses(tx, purchaserId, purchaseAmount) {
     console.log('=== 🎁 INICIANDO DISTRIBUIÇÃO DE BÔNUS ===');
     console.log('👤 Comprador ID:', purchaserId);
@@ -3941,16 +3940,11 @@ async function distributeReferralBonuses(tx, purchaserId, purchaseAmount) {
             return bonusResults;
         }
 
-        // Mostrar detalhes da rede encontrada
-        purchaserReferrers.forEach(ref => {
-            console.log(`📋 Nível ${ref.level}: ${ref.referrer.mobile} (${ref.referrer.invitation_code})`);
-        });
-
-        // Percentuais de bônus por nível
+        // Percentuais de bônus CORRETOS
         const bonusPercentages = {
-            1: 0.27, // 27% para nível 1 (quem convidou diretamente)
-            2: 0.03, // 3% para nível 2
-            3: 0.01  // 1% para nível 3
+            1: 0.25, // ✅ 25% para nível 1
+            2: 0.02, // ✅ 2% para nível 2
+            3: 0.01  // ✅ 1% para nível 3
         };
 
         // PASSO 2: Distribuir bônus para os patrocinadores
