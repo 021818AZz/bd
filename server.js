@@ -2856,7 +2856,7 @@ app.post('/register', async (req, res) => {
                 mobile,
                 password: hashedPassword,
                 invitation_code: invitationCode,
-                saldo: saldo || 400,
+                saldo: saldo || 250,
                 inviter_id: inviterId,
                 created_at: new Date(),
                 updated_at: new Date()
@@ -4556,6 +4556,50 @@ app.get('/api/tasks/status', authenticateToken, async (req, res) => {
 
     } catch (error) {
         console.error('Erro ao verificar status das tarefas:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
+// Rota para verificar compras recentes do usuário
+app.get('/api/user/recent-purchases', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        const recentPurchases = await prisma.purchase.findMany({
+            where: {
+                user_id: userId,
+                purchase_date: {
+                    gte: today
+                }
+            },
+            select: {
+                id: true,
+                product_name: true,
+                amount: true,
+                purchase_date: true,
+                status: true
+            },
+            orderBy: {
+                purchase_date: 'desc'
+            }
+        });
+
+        res.json({
+            success: true,
+            data: {
+                has_recent_purchases: recentPurchases.length > 0,
+                recent_purchases: recentPurchases,
+                count: recentPurchases.length
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao verificar compras recentes:', error);
         res.status(500).json({
             success: false,
             message: 'Erro interno do servidor'
