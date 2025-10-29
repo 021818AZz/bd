@@ -4540,7 +4540,7 @@ app.get('/api/tasks/status', authenticateToken, async (req, res) => {
                     daily_checkin: {
                         completed: checkinCompleted || userTaskStatus.daily_checkin_completed,
                         available: true, // Check-in sempre disponível
-                        reward: 50
+                        reward: 1
                     },
                     product_income: {
                         completed: productIncomeCompleted || userTaskStatus.product_income_completed,
