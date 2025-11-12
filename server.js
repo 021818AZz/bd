@@ -5424,9 +5424,9 @@ app.get('/api/team/members-detailed', authenticateToken, async (req, res) => {
 // Função para calcular o valor do bônus baseado na porcentagem
 function calculateBonusValue(rechargeAmount, level) {
     const commissionRates = {
-        1: 0.27, // 27%
+        1: 0.20, // 20%
         2: 0.03, // 3%
-        3: 0.01  // 1%
+        3: 0.02  // 1%
     };
     
     return rechargeAmount * (commissionRates[level] || 0);
