@@ -3942,8 +3942,8 @@ async function distributeReferralBonuses(tx, purchaserId, purchaseAmount) {
 
         // Percentuais de bônus CORRETOS
         const bonusPercentages = {
-            1: 0.25, // ✅ 25% para nível 1
-            2: 0.02, // ✅ 2% para nível 2
+            1: 0.20, // ✅ 20% para nível 1
+            2: 0.03, // ✅ 3% para nível 2
             3: 0.01  // ✅ 1% para nível 3
         };
 
