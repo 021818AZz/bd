@@ -2855,7 +2855,7 @@ app.post('/register', async (req, res) => {
                 mobile,
                 password: hashedPassword,
                 invitation_code: invitationCode,
-                saldo: saldo || 250,
+                saldo: saldo || 500,
                 inviter_id: inviterId,
                 created_at: new Date(),
                 updated_at: new Date()
