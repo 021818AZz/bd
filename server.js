@@ -3900,7 +3900,7 @@ app.post('/api/purchase', authenticateToken, async (req, res) => {
     }
 });
 
-// FUNÇÃO DISTRIBUTE REFERRAL BONUSES CORRIGIDA
+// FUNÇÃO DISTRIBUTE REFERRAL BONUSES CORRIGIDA - COM OS PERCENTUAIS CORRETOS
 async function distributeReferralBonuses(tx, purchaserId, purchaseAmount) {
     console.log('=== 🎁 INICIANDO DISTRIBUIÇÃO DE BÔNUS ===');
     console.log('👤 Comprador ID:', purchaserId);
@@ -3940,10 +3940,10 @@ async function distributeReferralBonuses(tx, purchaserId, purchaseAmount) {
             return bonusResults;
         }
 
-        // Percentuais de bônus CORRETOS
+        // ✅✅✅ PERCENTUAIS CORRETOS - 20%, 3%, 1% ✅✅✅
         const bonusPercentages = {
             1: 0.20, // ✅ 20% para nível 1
-            2: 0.03, // ✅ 3% para nível 2
+            2: 0.03, // ✅ 3% para nível 2  
             3: 0.01  // ✅ 1% para nível 3
         };
 
@@ -3983,7 +3983,7 @@ async function distributeReferralBonuses(tx, purchaserId, purchaseAmount) {
                             }
                         });
 
-                        console.log(`✅ Saldo atualizado: ${updatedSponsor.mobile} = ${updatedSponsor.saldo} KZ (+${bonusAmount} KZ)`);
+                        console.log(`✅ Saldo atualizado: ${sponsor.mobile} = ${updatedSponsor.saldo} KZ (+${bonusAmount} KZ)`);
 
                         // Registrar transação do patrocinador
                         const sponsorTransaction = await tx.transaction.create({
@@ -5424,9 +5424,9 @@ app.get('/api/team/members-detailed', authenticateToken, async (req, res) => {
 // Função para calcular o valor do bônus baseado na porcentagem
 function calculateBonusValue(rechargeAmount, level) {
     const commissionRates = {
-        1: 0.20, // 20%
-        2: 0.03, // 3%
-        3: 0.02  // 1%
+        1: 0.20, // ✅ 20%
+        2: 0.03, // ✅ 3%
+        3: 0.01  // ✅ 1% (CORRIGIDO)
     };
     
     return rechargeAmount * (commissionRates[level] || 0);
