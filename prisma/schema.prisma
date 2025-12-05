@@ -116,43 +116,33 @@ model DailyCheckin {
   @@map("daily_checkins")
 }
 
-// Prisma schema atualizado com os campos solicitados
-// Modelo Purchase com os novos campos: payment_status e payment_method
-
-
 model Purchase {
-id String @id @map("_id") @default(auto()) @db.ObjectId
-user_id String @db.ObjectId
-product_id String
-product_name String
-amount Int
-quantity Int
-daily_return Int @default(13)
-cycle_days Int @default(30)
-purchase_date DateTime
-next_payout DateTime
-expiry_date DateTime
-status String @default("active")
-total_earned Int @default(0)
-payout_count Int @default(0)
-last_payout DateTime?
-completed_at DateTime?
-created_at DateTime @default(now())
+  id            String   @id @map("_id") @default(auto()) @db.ObjectId
+  user_id       String   @db.ObjectId
+  product_id    String
+  product_name  String
+  amount        Int
+  quantity      Int
+  daily_return  Int      @default(13)
+  cycle_days    Int      @default(30)
+  purchase_date DateTime
+  next_payout   DateTime
+  expiry_date   DateTime
+  status        String   @default("active")
+  total_earned  Int      @default(0)
+  payout_count  Int      @default(0)
+  last_payout   DateTime?
+  completed_at  DateTime?
+  created_at    DateTime @default(now())
 
+  user User @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
-// 🔹 Campos adicionados conforme solicitado
-payment_status String @default("paid") // paid, pending, failed
-payment_method String @default("balance") // balance, post_delivery
-
-
-user User @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-
-
-@@index([user_id])
-@@index([next_payout])
-@@index([status])
-@@index([expiry_date])
+  @@index([user_id])
+  @@index([next_payout])
+  @@index([status])
+  @@index([expiry_date])
 }
+
 model Transaction {
   id            String   @id @map("_id") @default(auto()) @db.ObjectId
   user_id       String   @db.ObjectId
