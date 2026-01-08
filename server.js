@@ -7246,6 +7246,413 @@ app.post('/api/user/bank-account', authenticateToken, async (req, res) => {
     }
 });
 
+
+
+// ==============================================
+// ENDPOINTS PARA PACOTES/COMPRAS (SEM ALTERAR PRISMA)
+// ==============================================
+
+// 1. ROTA PRINCIPAL PARA OBTER PACOTES DO USUÁRIO
+app.get('/api/user/purchases', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        
+        // Buscar todas as compras do usuário
+        const purchases = await prisma.purchase.findMany({
+            where: {
+                user_id: userId
+            },
+            orderBy: {
+                purchase_date: 'desc'
+            }
+        });
+
+        // Formatar resposta
+        const formattedPurchases = purchases.map(purchase => {
+            const today = new Date();
+            const expiryDate = new Date(purchase.expiry_date);
+            const lastPayout = purchase.last_payout ? new Date(purchase.last_payout) : null;
+            
+            // Calcular dias restantes
+            const daysRemaining = Math.max(0, Math.ceil((expiryDate - today) / (1000 * 60 * 60 * 24)));
+            
+            // Verificar se pode coletar hoje
+            let canCollect = false;
+            if (purchase.status === 'active' && daysRemaining > 0) {
+                if (!lastPayout) {
+                    canCollect = true; // Nunca coletou
+                } else {
+                    // Verificar se já coletou hoje
+                    const sameDay = lastPayout.getDate() === today.getDate() &&
+                                   lastPayout.getMonth() === today.getMonth() &&
+                                   lastPayout.getFullYear() === today.getFullYear();
+                    canCollect = !sameDay;
+                }
+            }
+
+            return {
+                id: purchase.id,
+                product_id: purchase.product_id,
+                product_name: purchase.product_name || 'Produto',
+                amount: purchase.amount,
+                daily_return: purchase.daily_return,
+                total_return: purchase.daily_return * purchase.cycle_days,
+                total_earned: purchase.total_earned || 0,
+                quantity: purchase.quantity,
+                status: purchase.status,
+                purchase_date: purchase.purchase_date,
+                expiry_date: purchase.expiry_date,
+                next_payout: purchase.next_payout,
+                cycle_days: purchase.cycle_days,
+                days_remaining: daysRemaining,
+                payout_count: purchase.payout_count || 0,
+                can_collect: canCollect,
+                last_payout: purchase.last_payout
+            };
+        });
+
+        res.json({
+            success: true,
+            data: formattedPurchases
+        });
+
+    } catch (error) {
+        console.error('Erro ao buscar compras:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro ao buscar seus pacotes'
+        });
+    }
+});
+
+// 2. ROTA PARA COLETAR RENDIMENTO DE UM PRODUTO
+app.post('/api/tasks/collect-product-income', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { product_id } = req.body;
+
+        if (!product_id) {
+            return res.status(400).json({
+                success: false,
+                message: 'ID do produto é obrigatório'
+            });
+        }
+
+        // Buscar a compra
+        const purchase = await prisma.purchase.findFirst({
+            where: {
+                id: product_id,
+                user_id: userId,
+                status: 'active'
+            }
+        });
+
+        if (!purchase) {
+            return res.status(404).json({
+                success: false,
+                message: 'Produto não encontrado ou não está ativo'
+            });
+        }
+
+        const today = new Date();
+        
+        // Verificar se já expirou
+        if (today > new Date(purchase.expiry_date)) {
+            // Atualizar para completed
+            await prisma.purchase.update({
+                where: { id: purchase.id },
+                data: { status: 'completed' }
+            });
+            
+            return res.status(400).json({
+                success: false,
+                message: 'Este produto já expirou'
+            });
+        }
+
+        // Verificar se já coletou hoje
+        if (purchase.last_payout) {
+            const lastPayout = new Date(purchase.last_payout);
+            const sameDay = lastPayout.getDate() === today.getDate() &&
+                           lastPayout.getMonth() === today.getMonth() &&
+                           lastPayout.getFullYear() === today.getFullYear();
+            
+            if (sameDay) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Você já coletou o rendimento hoje'
+                });
+            }
+        }
+
+        const dailyIncome = purchase.daily_return || 0;
+
+        // Usar transaction para garantir consistência
+        const result = await prisma.$transaction(async (tx) => {
+            // 1. Atualizar saldo do usuário
+            const user = await tx.user.update({
+                where: { id: userId },
+                data: {
+                    saldo: {
+                        increment: dailyIncome
+                    }
+                },
+                select: {
+                    saldo: true
+                }
+            });
+
+            // 2. Atualizar a compra
+            const updatedPurchase = await tx.purchase.update({
+                where: { id: purchase.id },
+                data: {
+                    last_payout: today,
+                    total_earned: {
+                        increment: dailyIncome
+                    },
+                    payout_count: {
+                        increment: 1
+                    },
+                    next_payout: new Date(today.getTime() + 24 * 60 * 60 * 1000)
+                }
+            });
+
+            // 3. Registrar transação
+            await tx.transaction.create({
+                data: {
+                    user_id: userId,
+                    type: 'income',
+                    amount: dailyIncome,
+                    description: `Rendimento do produto: ${purchase.product_name}`,
+                    balance_after: user.saldo,
+                    created_at: today
+                }
+            });
+
+            return {
+                income: dailyIncome,
+                new_balance: user.saldo,
+                purchase: updatedPurchase
+            };
+        });
+
+        res.json({
+            success: true,
+            message: 'Rendimento coletado com sucesso!',
+            data: {
+                income: result.income,
+                new_balance: result.new_balance
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao coletar rendimento:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro ao coletar rendimento'
+        });
+    }
+});
+
+// 3. ROTA PARA COLETAR TODOS OS RENDIMENTOS
+app.post('/api/tasks/collect-all-income', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const today = new Date();
+
+        // Buscar todas as compras ativas que podem ser coletadas
+        const activePurchases = await prisma.purchase.findMany({
+            where: {
+                user_id: userId,
+                status: 'active',
+                expiry_date: {
+                    gt: today
+                }
+            }
+        });
+
+        if (activePurchases.length === 0) {
+            return res.json({
+                success: true,
+                message: 'Nenhum produto disponível para coleta',
+                data: {
+                    total_income: 0,
+                    new_balance: 0
+                }
+            });
+        }
+
+        // Filtrar apenas os que podem ser coletados hoje
+        const collectablePurchases = activePurchases.filter(purchase => {
+            if (!purchase.last_payout) return true;
+            
+            const lastPayout = new Date(purchase.last_payout);
+            const sameDay = lastPayout.getDate() === today.getDate() &&
+                           lastPayout.getMonth() === today.getMonth() &&
+                           lastPayout.getFullYear() === today.getFullYear();
+            return !sameDay;
+        });
+
+        if (collectablePurchases.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Você já coletou todos os rendimentos hoje'
+            });
+        }
+
+        // Calcular total
+        let totalIncome = 0;
+        collectablePurchases.forEach(purchase => {
+            totalIncome += purchase.daily_return || 0;
+        });
+
+        // Processar em transaction
+        const result = await prisma.$transaction(async (tx) => {
+            // 1. Atualizar saldo do usuário
+            const user = await tx.user.update({
+                where: { id: userId },
+                data: {
+                    saldo: {
+                        increment: totalIncome
+                    }
+                },
+                select: {
+                    saldo: true
+                }
+            });
+
+            // 2. Atualizar cada compra
+            for (const purchase of collectablePurchases) {
+                await tx.purchase.update({
+                    where: { id: purchase.id },
+                    data: {
+                        last_payout: today,
+                        total_earned: {
+                            increment: purchase.daily_return
+                        },
+                        payout_count: {
+                            increment: 1
+                        },
+                        next_payout: new Date(today.getTime() + 24 * 60 * 60 * 1000)
+                    }
+                });
+            }
+
+            // 3. Registrar transação
+            await tx.transaction.create({
+                data: {
+                    user_id: userId,
+                    type: 'income',
+                    amount: totalIncome,
+                    description: `Rendimentos de ${collectablePurchases.length} produtos`,
+                    balance_after: user.saldo,
+                    created_at: today
+                }
+            });
+
+            return {
+                total_income: totalIncome,
+                new_balance: user.saldo,
+                products_collected: collectablePurchases.length
+            };
+        });
+
+        res.json({
+            success: true,
+            message: `Rendimentos coletados de ${result.products_collected} produtos!`,
+            data: result
+        });
+
+    } catch (error) {
+        console.error('Erro ao coletar todos os rendimentos:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro ao coletar rendimentos'
+        });
+    }
+});
+
+// 4. ROTA PARA ESTATÍSTICAS
+app.get('/api/user/packages-stats', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        // Buscar todas as compras
+        const purchases = await prisma.purchase.findMany({
+            where: {
+                user_id: userId
+            }
+        });
+
+        // Calcular estatísticas
+        const totalPackages = purchases.length;
+        const activePackages = purchases.filter(p => p.status === 'active').length;
+        const completedPackages = purchases.filter(p => p.status === 'completed').length;
+        
+        const dailyIncome = purchases
+            .filter(p => p.status === 'active')
+            .reduce((sum, p) => sum + (p.daily_return || 0), 0);
+
+        const totalEarned = purchases.reduce((sum, p) => sum + (p.total_earned || 0), 0);
+        const totalInvested = purchases.reduce((sum, p) => sum + (p.amount || 0), 0);
+        const netProfit = totalEarned - totalInvested;
+
+        res.json({
+            success: true,
+            data: {
+                total_packages: totalPackages,
+                active_packages: activePackages,
+                completed_packages: completedPackages,
+                daily_income: dailyIncome,
+                total_earned: totalEarned,
+                total_invested: totalInvested,
+                net_profit: netProfit
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao buscar estatísticas:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro ao buscar estatísticas'
+        });
+    }
+});
+
+// 5. ROTA PARA PACOTES RECENTES (OPCIONAL)
+app.get('/api/user/recent-purchases', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        
+        const recentPurchases = await prisma.purchase.findMany({
+            where: {
+                user_id: userId
+            },
+            orderBy: {
+                purchase_date: 'desc'
+            },
+            take: 5
+        });
+
+        res.json({
+            success: true,
+            data: {
+                recent_purchases: recentPurchases,
+                total: recentPurchases.length
+            }
+        });
+
+    } catch (error) {
+        console.error('Erro ao buscar compras recentes:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro ao buscar compras recentes'
+        });
+    }
+});
+
+
+
 // Rota para atualizar conta bancária
 app.put('/api/user/bank-account', authenticateToken, async (req, res) => {
     try {
