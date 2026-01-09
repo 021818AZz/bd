@@ -3335,6 +3335,71 @@ app.put('/user/profile/update', authenticateToken, async (req, res) => {
     }
 });
 
+
+
+// ==============================================
+// ROTA PARA TRANSACOES DO USUÁRIO AUTENTICADO
+// ==============================================
+
+// Rota para obter transações do usuário autenticado
+app.get('/api/user/transactions', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { page = 1, limit = 100, type } = req.query;
+        
+        console.log(`📊 Buscando transações para usuário: ${userId}`);
+        
+        // Construir filtro
+        const whereClause = { user_id: userId };
+        if (type) {
+            whereClause.type = type;
+        }
+        
+        // Buscar transações
+        const transactions = await prisma.transaction.findMany({
+            where: whereClause,
+            orderBy: { created_at: 'desc' },
+            skip: (parseInt(page) - 1) * parseInt(limit),
+            take: parseInt(limit),
+            select: {
+                id: true,
+                type: true,
+                amount: true,
+                description: true,
+                balance_after: true,
+                created_at: true
+            }
+        });
+        
+        // Contar total
+        const total = await prisma.transaction.count({
+            where: whereClause
+        });
+        
+        console.log(`✅ Encontradas ${transactions.length} transações para usuário ${userId}`);
+        
+        res.json({
+            success: true,
+            data: {
+                transactions,
+                pagination: {
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    total,
+                    pages: Math.ceil(total / parseInt(limit))
+                }
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Erro ao buscar transações do usuário:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erro interno do servidor'
+        });
+    }
+});
+
 // Rota para alterar senha
 app.put('/user/password/update', authenticateToken, async (req, res) => {
     try {
