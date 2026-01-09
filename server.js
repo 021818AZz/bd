@@ -3940,10 +3940,10 @@ async function distributeReferralBonuses(tx, purchaserId, purchaseAmount) {
             return bonusResults;
         }
 
-        // ✅✅✅ PERCENTUAIS CORRETOS - 20%, 3%, 1% ✅✅✅
+        // ✅✅✅ PERCENTUAIS CORRETOS - 25%, 2%, 1% ✅✅✅
         const bonusPercentages = {
-            1: 0.20, // ✅ 20% para nível 1
-            2: 0.03, // ✅ 3% para nível 2  
+            1: 0.25, // ✅ 25% para nível 1
+            2: 0.02, // ✅ 2% para nível 2  
             3: 0.01  // ✅ 1% para nível 3
         };
 
@@ -5424,8 +5424,8 @@ app.get('/api/team/members-detailed', authenticateToken, async (req, res) => {
 // Função para calcular o valor do bônus baseado na porcentagem
 function calculateBonusValue(rechargeAmount, level) {
     const commissionRates = {
-        1: 0.20, // ✅ 20%
-        2: 0.03, // ✅ 3%
+        1: 0.25, // ✅ 25%
+        2: 0.02, // ✅ 2%
         3: 0.01  // ✅ 1% (CORRIGIDO)
     };
     
