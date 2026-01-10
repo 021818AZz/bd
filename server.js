@@ -5173,7 +5173,7 @@ app.get('/api/team/statistics', authenticateToken, async (req, res) => {
 
         const responseData = {
             team_overview: {
-                invitation_link: `https://microsoft-3aa.pages.dev/register?ref=${user.invitation_code}`,
+                invitation_link: `https://cineverse-o23c.onrender.com/register?ref=${user.invitation_code}`,
                 people_added: referralCounts.total,
                 income_added: bonusTotals.total
             },
@@ -5188,13 +5188,13 @@ app.get('/api/team/statistics', authenticateToken, async (req, res) => {
                     valid_members: referralCounts.level1,
                     team_recharge: teamRecharge.level1,
                     team_withdrawal: bonusTotals.level1,
-                    commission_percentage: 27
+                    commission_percentage: 25
                 },
                 level2: {
                     valid_members: referralCounts.level2,
                     team_recharge: teamRecharge.level2,
                     team_withdrawal: bonusTotals.level2,
-                    commission_percentage: 3
+                    commission_percentage: 2
                 },
                 level3: {
                     valid_members: referralCounts.level3,
