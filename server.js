@@ -5173,7 +5173,7 @@ app.get('/api/team/statistics', authenticateToken, async (req, res) => {
 
         const responseData = {
             team_overview: {
-                invitation_link: `https://www.cineverse.work/register?ref=${user.invitation_code}`,
+                invitation_link: `https://microsoftt.pages.dev/register?ref=${user.invitation_code}`,
                 people_added: referralCounts.total,
                 income_added: bonusTotals.total
             },
